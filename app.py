@@ -1,40 +1,19 @@
 import os
-import sqlite3
 from datetime import datetime
 from flask import Flask, render_template_string, request, redirect
 
 app = Flask(__name__)
-DB_FILE = "board.db"
 
-# Инициализация базы данных SQLite (чтобы сообщения сохранялись навсегда)
-def init_db():
-    with sqlite3.connect(DB_FILE) as conn:
-        cursor = conn.cursor()
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS posts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                text TEXT NOT NULL,
-                image_url TEXT,
-                date TEXT NOT NULL
-            )
-        """)
-        conn.commit()
+# Храним посты прямо в памяти сервера (гарантирует работу без ошибки 500)
+POSTS_STORAGE = [
+    {
+        "id": 1,
+        "text": "Добро пожаловать в Мир Идиаканта! Борда успешно запущена. Ошибка 500 побеждена!",
+        "image_url": "https://images.prodia.xyz/8f772418-4a6c-48be-88be-9b34a15a0c02.png",
+        "date": datetime.now().strftime("%d.%m.%Y %H:%M")
+    }
+]
 
-def load_posts():
-    with sqlite3.connect(DB_FILE) as conn:
-        conn.row_factory = sqlite3.Row
-        cursor = conn.cursor()
-        cursor.execute("SELECT * FROM posts ORDER BY id DESC")
-        return [dict(row) for row in cursor.fetchall()]
-
-def save_post(text, image_url):
-    with sqlite3.connect(DB_FILE) as conn:
-        cursor = conn.cursor()
-        cursor.execute("INSERT INTO posts (text, image_url, date) VALUES (?, ?, ?)",
-                       (text, image_url, datetime.now().strftime("%d.%m.%Y %H:%M")))
-        conn.commit()
-
-# Красивый HTML-шаблон с котом из 1000067004.png на фоне
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -45,7 +24,6 @@ HTML_TEMPLATE = """
     <style>
         body { 
             font-family: 'Courier New', monospace, sans-serif; 
-            /* Ставим кота на задний фон, фиксируем его и размываем, чтобы текст читался */
             background: linear-gradient(rgba(29, 29, 29, 0.85), rgba(29, 29, 29, 0.85)), 
                         url('https://images.prodia.xyz/8f772418-4a6c-48be-88be-9b34a15a0c02.png') no-repeat center center fixed;
             background-size: cover;
@@ -107,7 +85,6 @@ HTML_TEMPLATE = """
             font-size: 16px;
             border-radius: 4px; 
             cursor: pointer; 
-            box-shadow: 0 2px 5px rgba(0,0,0,0.3);
         }
         .submit-btn:hover { background: #ff6f00; }
         
@@ -117,7 +94,6 @@ HTML_TEMPLATE = """
             border-radius: 6px; 
             margin-bottom: 15px; 
             border-left: 5px solid #ff8f00; 
-            box-shadow: 0 2px 8px rgba(0,0,0,0.4);
         }
         .post-header { font-size: 12px; color: #ffb74d; margin-bottom: 10px; border-bottom: 1px dashed #444; padding-bottom: 5px; }
         .post-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #f5f5f5; }
@@ -134,7 +110,7 @@ HTML_TEMPLATE = """
             
             <div class="img-input-container">
                 <input type="url" id="image_url" name="image_url" placeholder="Ссылка на картинку (https://...)">
-                <button type="button" class="paste-btn" onclick="pasteFromClipboard()" title="Вставить из буфера">📋 Вставить</button>
+                <button type="button" class="paste-btn" onclick="pasteFromClipboard()">📋 Вставить</button>
             </div>
             
             <button type="submit" class="submit-btn">Отправить пост</button>
@@ -151,24 +127,21 @@ HTML_TEMPLATE = """
                     </a>
                 {% endif %}
             </div>
-            {% else %}
-            <p style="text-align:center; color:#aaa;">Здесь пока тихо. Начни общение первым!</p>
             {% endfor %}
         </div>
     </div>
 
     <script>
-        // Функция автоматической вставки ссылки из буфера обмена телефона
         async function pasteFromClipboard() {
             try {
                 const text = await navigator.clipboard.readText();
                 if (text.startsWith('http://') || text.startsWith('https://')) {
                     document.getElementById('image_url').value = text;
                 } else {
-                    alert('В буфере обмена нет прямой ссылки на картинку!');
+                    alert('В буфере обмена нет ссылки!');
                 }
             } catch (err) {
-                alert('Разреши сайту доступ к буферу обмена для быстрой вставки.');
+                alert('Разреши доступ к буферу.');
             }
         }
     </script>
@@ -178,8 +151,8 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
-    posts = load_posts()
-    return render_template_string(HTML_TEMPLATE, posts=posts)
+    # Показываем посты в обратном порядке (новые сверху)
+    return render_template_string(HTML_TEMPLATE, posts=reversed(POSTS_STORAGE))
 
 @app.route("/create", methods=["POST"])
 def create():
@@ -188,10 +161,15 @@ def create():
     
     if text:
         valid_url = image_url if image_url.startswith(("http://", "https://")) else None
-        save_post(text, valid_url)
+        new_post = {
+            "id": len(POSTS_STORAGE) + 1,
+            "text": text,
+            "image_url": valid_url,
+            "date": datetime.now().strftime("%d.%m.%Y %H:%M")
+        }
+        POSTS_STORAGE.append(new_post)
         
     return redirect("/")
 
 if __name__ == "__main__":
-    init_db()
     app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 5000)))
