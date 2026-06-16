@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: anon-imageboard
+    runtime: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: gunicorn app:app
+    disk:
+      name: board-data
+      mountPath: /data
+      sizeGB: 1
