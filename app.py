@@ -13,15 +13,16 @@ LOCAL_STORAGE_DIR = "rooms_data"
 if not os.path.exists(LOCAL_STORAGE_DIR):
     os.makedirs(LOCAL_STORAGE_DIR)
 
-# Список доступных чатов (комнат)
+# Наш расширенный список тематических чатов с красивыми иконками
 ROOMS = {
-    "b": "Бред (Основной)",
-    "games": "Игровой уголок",
-    "code": "Программирование",
-    "cats": "Ламповые коты"
+    "b": "💬 Бред (Основной)",
+    "games": "🎮 Игровой уголок",
+    "code": "💻 Программирование",
+    "cats": "🐱 Ламповые коты",
+    "memes": "🔥 Мемы и пикчи",
+    "secret": "🔒 Секретная зона"
 }
 
-# Проверка: подключена ли облачная база данных
 def is_supabase_available():
     return os.environ.get("DATABASE_URL") is not None
 
@@ -29,7 +30,6 @@ def get_db_connection():
     db_url = os.environ.get("DATABASE_URL")
     return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
 
-# Создание таблиц в Supabase
 def init_db():
     if is_supabase_available():
         try:
@@ -50,9 +50,8 @@ def init_db():
             conn.close()
             print("--- БАЗА ДАННЫХ SUPABASE УСПЕШНО ИНИЦИАЛИЗИРОВАНА ---")
         except Exception as e:
-            print(f"Ошибка при работе с Supabase: {e}. Переходим на файлы.")
+            print(f"Ошибка инициализации Supabase: {e}. Работаем через файлы.")
 
-# Чтение сообщений (из базы или файлов)
 def load_posts(room_id):
     if is_supabase_available():
         try:
@@ -64,16 +63,15 @@ def load_posts(room_id):
             conn.close()
             return posts
         except Exception as e:
-            print(f"Ошибка чтения Supabase: {e}. Читаем из файлов.")
+            print(f"Ошибка чтения Supabase: {e}. Переключаемся на локальные файлы.")
     
-    # Резервный файловый метод (сохранение в файлы-папки)
+    # Файловый резервный метод
     file_path = os.path.join(LOCAL_STORAGE_DIR, f"{room_id}.json")
     if os.path.exists(file_path):
         with open(file_path, "r", encoding="utf-8") as f:
             return json.load(f)
     return []
 
-# Запись сообщений (в базу или файлы)
 def save_post(room_id, author, text, image_url, date_str):
     if is_supabase_available():
         try:
@@ -90,7 +88,7 @@ def save_post(room_id, author, text, image_url, date_str):
         except Exception as e:
             print(f"Ошибка записи в Supabase: {e}. Пишем в файлы.")
             
-    # Резервный файловый метод
+    # Файловый резервный метод
     posts = load_posts(room_id)
     new_id = len(posts) + 1
     new_post = {
@@ -101,12 +99,13 @@ def save_post(room_id, author, text, image_url, date_str):
         "image_url": image_url,
         "date": date_str
     }
-    posts.insert(0, new_post) # Добавляем в начало списка
+    posts.insert(0, new_post)
     
     file_path = os.path.join(LOCAL_STORAGE_DIR, f"{room_id}.json")
     with open(file_path, "w", encoding="utf-8") as f:
         json.dump(posts, f, ensure_ascii=False, indent=4)
 
+# Новый ультрасовременный адаптивный интерфейс
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -115,185 +114,269 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Мир Идиаканта — {{ room_title }}</title>
     <style>
+        * { box-sizing: border-box; transition: all 0.2s ease; }
         body { 
-            font-family: 'Courier New', monospace, sans-serif; 
-            background: linear-gradient(rgba(29, 29, 29, 0.85), rgba(29, 29, 29, 0.85)), 
-                        url('https://images.prodia.xyz/8f772418-4a6c-48be-88be-9b34a15a0c02.png') no-repeat center center fixed;
-            background-size: cover;
-            color: #e0e0e0; 
-            padding: 10px; 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background: #121212;
+            color: #e5e5e5; 
+            padding: 0; 
             margin: 0; 
         }
-        .container { max-width: 650px; margin: 0 auto; }
-        h1 { text-align: center; color: #ffca28; font-size: 26px; text-shadow: 2px 2px 4px #000; margin-bottom: 5px; }
         
-        /* Стили меню выбора чатов */
-        .rooms-menu {
+        /* Шапка сайта */
+        .app-header {
+            background: #1f1f1f;
+            border-bottom: 2px solid #ff9800;
+            padding: 15px;
+            text-align: center;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+        }
+        .app-header h1 {
+            margin: 0;
+            font-size: 22px;
+            color: #ffb74d;
+            letter-spacing: 1px;
+            text-shadow: 0 2px 4px rgba(0,0,0,0.5);
+        }
+        
+        .container { 
+            max-width: 600px; 
+            margin: 0 auto; 
+            padding: 15px;
+        }
+        
+        /* Современный горизонтальный скролл комнат */
+        .rooms-scroll {
             display: flex;
-            justify-content: center;
-            gap: 8px;
-            flex-wrap: wrap;
-            margin-bottom: 20px;
-            background: rgba(40, 40, 40, 0.9);
-            padding: 10px;
-            border-radius: 6px;
-            border: 1px solid #444;
+            gap: 10px;
+            overflow-x: auto;
+            padding: 5px 0 12px 0;
+            margin-bottom: 15px;
+            scroll-behavior: smooth;
         }
-        .room-link {
-            color: #aaa;
+        .rooms-scroll::-webkit-scrollbar { height: 4px; }
+        .rooms-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
+        
+        .room-chip {
+            background: #1e1e1e;
+            color: #a0a0a0;
             text-decoration: none;
-            padding: 6px 12px;
-            border-radius: 4px;
-            font-size: 13px;
-            background: #222;
-            border: 1px solid #555;
+            padding: 10px 16px;
+            border-radius: 25px;
+            font-size: 14px;
+            white-space: nowrap;
+            border: 1px solid #2d2d2d;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.2);
         }
-        .room-link.active {
-            color: #fff;
-            background: #ff8f00;
-            border-color: #ffca28;
+        .room-chip:hover { border-color: #ffb74d; color: #fff; }
+        .room-chip.active {
+            color: #121212;
+            background: linear-gradient(135deg, #ffb74d, #ff9800);
+            border-color: #ff9800;
             font-weight: bold;
+            box-shadow: 0 4px 10px rgba(255,152,0,0.3);
         }
         
-        form { 
-            background: rgba(45, 45, 45, 0.85); 
-            padding: 15px; 
-            border-radius: 8px; 
-            margin-bottom: 25px; 
-            border: 1px solid #ffca28;
-            box-shadow: 0 4px 15px rgba(0,0,0,0.5);
+        /* Красивая форма отправки */
+        .post-form { 
+            background: #1e1e1e; 
+            padding: 16px; 
+            border-radius: 14px; 
+            margin-bottom: 20px; 
+            border: 1px solid #2d2d2d;
+            box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+        }
+        .input-group {
+            margin-bottom: 12px;
         }
         .nickname-input {
             width: 100%;
-            padding: 8px;
-            margin-bottom: 10px;
-            border-radius: 4px;
-            border: 1px solid #555;
-            background: #111;
+            padding: 12px;
+            border-radius: 8px;
+            border: 1px solid #333;
+            background: #151515;
             color: #81c784;
             font-weight: bold;
-            box-sizing: border-box;
+            font-size: 15px;
         }
+        .nickname-input:focus { border-color: #81c784; outline: none; background: #1a1a1a; }
+        
         textarea { 
             width: 100%; 
-            padding: 10px; 
-            margin-bottom: 10px; 
-            border-radius: 4px; 
-            border: 1px solid #555; 
-            background: #222; 
-            color: #fff; 
-            box-sizing: border-box; 
-            resize: vertical;
-        }
-        .img-input-container { display: flex; gap: 5px; margin-bottom: 15px; }
-        .img-input-container input { 
-            flex: 1; 
-            padding: 10px; 
-            border-radius: 4px; 
-            border: 1px solid #555; 
-            background: #222; 
-            color: #fff; 
-            font-size: 13px;
-        }
-        .paste-btn { 
-            padding: 0 15px; 
-            background: #4db6ac; 
-            border: none; 
-            color: white; 
-            border-radius: 4px; 
-            cursor: pointer; 
-            font-weight: bold;
-        }
-        .submit-btn { 
-            width: 100%; 
             padding: 12px; 
-            background: #ff8f00; 
+            border-radius: 8px; 
+            border: 1px solid #333; 
+            background: #151515; 
+            color: #fff; 
+            font-size: 15px;
+            resize: none;
+        }
+        textarea:focus { border-color: #ff9800; outline: none; background: #1a1a1a; }
+        
+        .url-box { 
+            display: flex; 
+            gap: 8px; 
+        }
+        .url-box input { 
+            flex: 1; 
+            padding: 12px; 
+            border-radius: 8px; 
+            border: 1px solid #333; 
+            background: #151515; 
+            color: #fff; 
+            font-size: 14px;
+        }
+        .url-box input:focus { border-color: #ff9800; outline: none; }
+        
+        .btn-paste { 
+            padding: 0 15px; 
+            background: #26a69a; 
             border: none; 
             color: white; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            font-size: 14px;
+        }
+        .btn-paste:hover { background: #00897b; }
+        
+        .btn-submit { 
+            width: 100%; 
+            padding: 14px; 
+            background: linear-gradient(135deg, #ffb74d, #ff9800); 
+            border: none; 
+            color: #121212; 
             font-weight: bold; 
             font-size: 16px;
-            border-radius: 4px; 
+            border-radius: 8px; 
             cursor: pointer; 
+            margin-top: 10px;
+            box-shadow: 0 4px 10px rgba(255,152,0,0.2);
         }
+        .btn-submit:active { transform: scale(0.98); }
         
-        .post { 
-            background: rgba(40, 40, 40, 0.9); 
-            padding: 15px; 
-            border-radius: 6px; 
-            margin-bottom: 15px; 
-            border-left: 5px solid #ff8f00; 
+        /* Стили постов/сообщений */
+        .posts-list { display: flex; flex-direction: column; gap: 12px; }
+        
+        .post-card { 
+            background: #1e1e1e; 
+            padding: 16px; 
+            border-radius: 12px; 
+            border: 1px solid #2d2d2d;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.2);
         }
-        .post-header { font-size: 12px; color: #ffb74d; margin-bottom: 10px; border-bottom: 1px dashed #444; padding-bottom: 5px; }
-        .post-author { color: #81c784; font-weight: bold; }
-        .post-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #f5f5f5; }
-        .post-img { max-width: 100%; max-height: 350px; object-fit: contain; margin-top: 12px; border-radius: 4px; display: block; border: 1px solid #555; }
+        .post-meta { 
+            font-size: 12px; 
+            color: #777; 
+            margin-bottom: 8px; 
+            display: flex; 
+            justify-content: space-between;
+            align-items: center;
+            border-bottom: 1px solid #2d2d2d;
+            padding-bottom: 6px;
+        }
+        .author-badge { color: #81c784; font-weight: bold; font-size: 14px; }
+        .post-text { 
+            font-size: 15px; 
+            line-height: 1.5; 
+            white-space: pre-wrap; 
+            word-break: break-word; 
+            color: #f5f5f5; 
+        }
+        .post-image-wrapper {
+            margin-top: 12px;
+            border-radius: 8px;
+            overflow: hidden;
+            border: 1px solid #2d2d2d;
+            background: #151515;
+        }
+        .post-img { 
+            width: 100%; 
+            max-height: 380px; 
+            object-fit: contain; 
+            display: block; 
+        }
     </style>
 </head>
 <body>
+
+    <div class="app-header">
+        <h1>🌌 {{ room_title }}</h1>
+    </div>
+    
     <div class="container">
-        <h1>Мир Идиаканта</h1>
         
-        <div class="rooms-menu">
+        <div class="rooms-scroll">
             {% for r_id, r_name in rooms.items() %}
-                <a href="/room/{{ r_id }}" class="room-link {% if r_id == current_room %}active{% endif %}">
+                <a href="/room/{{ r_id }}" class="room-chip {% if r_id == current_room %}active{% endif %}">
                     {{ r_name }}
                 </a>
             {% endfor %}
         </div>
         
-        <form method="POST" action="/create/{{ current_room }}">
-            <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="Твой ник (оставь пустым для Анонима)..." maxlength="20">
-            <textarea name="text" rows="4" placeholder="Напиши что-нибудь в этот чат..." required></textarea>
-            
-            <div class="img-input-container">
-                <input type="url" id="image_url" name="image_url" placeholder="Ссылка на картинку (https://...)">
-                <button type="button" class="paste-btn" onclick="pasteFromClipboard()">📋 Вставить</button>
+        <form class="post-form" method="POST" action="/create/{{ current_room }}">
+            <div class="input-group">
+                <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="🕶️ Твой никнейм (или Аноним)" maxlength="20">
             </div>
-            
-            <button type="submit" class="submit-btn" onclick="saveNick()">Отправить в {{ room_title }}</button>
+            <div class="input-group">
+                <textarea name="text" rows="3" placeholder="Напиши сообщение в этот чат..." required></textarea>
+            </div>
+            <div class="input-group url-box">
+                <input type="url" id="image_url" name="image_url" placeholder="🔗 Ссылка на картинку (https://...)">
+                <button type="button" class="btn-paste" onclick="pasteFromClipboard()">📋</button>
+            </div>
+            <button type="submit" class="btn-submit" onclick="saveNick()">Отправить сообщение</button>
         </form>
 
-        <div class="posts">
+        <div class="posts-list">
             {% for post in posts %}
-            <div class="post">
-                <div class="post-header">
-                    <span class="post-author">{{ post.author }}</span> • №{{ post.id }} • {{ post.date }}
+            <div class="post-card">
+                <div class="post-meta">
+                    <span class="author-badge">{{ post.author }}</span>
+                    <span>№{{ post.id }} • {{ post.date }}</span>
                 </div>
                 <div class="post-text">{{ post.text }}</div>
                 {% if post.image_url %}
-                    <a href="{{ post.image_url }}" target="_blank">
-                        <img class="post-img" src="{{ post.image_url }}" alt="Изображение">
-                    </a>
+                    <div class="post-image-wrapper">
+                        <a href="{{ post.image_url }}" target="_blank">
+                            <img class="post-img" src="{{ post.image_url }}" alt="Изображение">
+                        </a>
+                    </div>
                 {% endif %}
             </div>
             {% else %}
-            <p style="text-align:center; color:#aaa;">В этом чате ещё нет сообщений. Напиши первое!</p>
+            <p style="text-align:center; color:#666; margin-top: 30px;">Тут пока пусто... Начни общение первым!</p>
             {% endfor %}
         </div>
     </div>
 
     <script>
+        // Восстановление никнейма при обновлении страницы
         window.onload = function() {
             if (localStorage.getItem('user_nick')) {
                 document.getElementById('nickname').value = localStorage.getItem('user_nick');
             }
         }
 
+        // Сохранение никнейма локально
         function saveNick() {
             const nick = document.getElementById('nickname').value;
             localStorage.setItem('user_nick', nick);
         }
 
+        // Быстрая вставка ссылки из буфера обмена
         async function pasteFromClipboard() {
             try {
                 const text = await navigator.clipboard.readText();
                 if (text.startsWith('http://') || text.startsWith('https://')) {
                     document.getElementById('image_url').value = text;
                 } else {
-                    alert('В буфере обмена нет ссылки!');
+                    alert('В буфере обмена нет ссылки на изображение!');
                 }
             } catch (err) {
-                alert('Разреши доступ к буферу.');
+                alert('Пожалуйста, разреши сайту доступ к буферу обмена.');
             }
         }
     </script>
