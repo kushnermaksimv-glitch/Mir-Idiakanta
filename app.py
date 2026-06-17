@@ -1,6 +1,6 @@
 import os
 import hashlib
-import sqlite3
+import json
 from datetime import datetime
 import psycopg2
 from psycopg2.extras import RealDictCursor
@@ -8,49 +8,104 @@ from flask import Flask, render_template_string, request, redirect
 
 app = Flask(__name__)
 
-# Функция подключения к базе данных Supabase
-def get_db_connection():
-    # Если мы на Render, берём строку подключения из настроек
-    db_url = os.environ.get("DATABASE_URL")
-    if db_url:
-        return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
-    else:
-        # Локальный резервный вариант на случай тестов на телефоне в Pydroid
-        conn = sqlite3.connect("local_fallback.db")
-        conn.row_factory = sqlite3.Row
-        return conn
+# Папка для локального сохранения (если Supabase отключится)
+LOCAL_STORAGE_DIR = "rooms_data"
+if not os.path.exists(LOCAL_STORAGE_DIR):
+    os.makedirs(LOCAL_STORAGE_DIR)
 
-# Создание таблицы в облаке, если её ещё нет
+# Список доступных чатов (комнат)
+ROOMS = {
+    "b": "Бред (Основной)",
+    "games": "Игровой уголок",
+    "code": "Программирование",
+    "cats": "Ламповые коты"
+}
+
+# Проверка: подключена ли облачная база данных
+def is_supabase_available():
+    return os.environ.get("DATABASE_URL") is not None
+
+def get_db_connection():
+    db_url = os.environ.get("DATABASE_URL")
+    return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
+
+# Создание таблиц в Supabase
 def init_db():
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    if is_supabase_available():
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("""
+                CREATE TABLE IF NOT EXISTS posts (
+                    id SERIAL PRIMARY KEY,
+                    room TEXT NOT NULL DEFAULT 'b',
+                    author TEXT NOT NULL,
+                    text TEXT NOT NULL,
+                    image_url TEXT,
+                    date TEXT NOT NULL
+                )
+            """)
+            conn.commit()
+            cursor.close()
+            conn.close()
+            print("--- БАЗА ДАННЫХ SUPABASE УСПЕШНО ИНИЦИАЛИЗИРОВАНА ---")
+        except Exception as e:
+            print(f"Ошибка при работе с Supabase: {e}. Переходим на файлы.")
+
+# Чтение сообщений (из базы или файлов)
+def load_posts(room_id):
+    if is_supabase_available():
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM posts WHERE room = %s ORDER BY id DESC", (room_id,))
+            posts = cursor.fetchall()
+            cursor.close()
+            conn.close()
+            return posts
+        except Exception as e:
+            print(f"Ошибка чтения Supabase: {e}. Читаем из файлов.")
     
-    # Проверяем, какая база используется, чтобы применить правильный тип данных
-    if os.environ.get("DATABASE_URL"):
-        # Команда для PostgreSQL (Supabase)
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS posts (
-                id SERIAL PRIMARY KEY,
-                author TEXT NOT NULL,
-                text TEXT NOT NULL,
-                image_url TEXT,
-                date TEXT NOT NULL
+    # Резервный файловый метод (сохранение в файлы-папки)
+    file_path = os.path.join(LOCAL_STORAGE_DIR, f"{room_id}.json")
+    if os.path.exists(file_path):
+        with open(file_path, "r", encoding="utf-8") as f:
+            return json.load(f)
+    return []
+
+# Запись сообщений (в базу или файлы)
+def save_post(room_id, author, text, image_url, date_str):
+    if is_supabase_available():
+        try:
+            conn = get_db_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                "INSERT INTO posts (room, author, text, image_url, date) VALUES (%s, %s, %s, %s, %s)",
+                (room_id, author, text, image_url, date_str)
             )
-        """)
-    else:
-        # Команда для локального SQLite
-        cursor.execute("""
-            CREATE TABLE IF NOT EXISTS posts (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                author TEXT NOT NULL,
-                text TEXT NOT NULL,
-                image_url TEXT,
-                date TEXT NOT NULL
-            )
-        """)
-    conn.commit()
-    cursor.close()
-    conn.close()
+            conn.commit()
+            cursor.close()
+            conn.close()
+            return
+        except Exception as e:
+            print(f"Ошибка записи в Supabase: {e}. Пишем в файлы.")
+            
+    # Резервный файловый метод
+    posts = load_posts(room_id)
+    new_id = len(posts) + 1
+    new_post = {
+        "id": new_id,
+        "room": room_id,
+        "author": author,
+        "text": text,
+        "image_url": image_url,
+        "date": date_str
+    }
+    posts.insert(0, new_post) # Добавляем в начало списка
+    
+    file_path = os.path.join(LOCAL_STORAGE_DIR, f"{room_id}.json")
+    with open(file_path, "w", encoding="utf-8") as f:
+        json.dump(posts, f, ensure_ascii=False, indent=4)
 
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -58,7 +113,7 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Мир Идиаканта — Имиджборда</title>
+    <title>Мир Идиаканта — {{ room_title }}</title>
     <style>
         body { 
             font-family: 'Courier New', monospace, sans-serif; 
@@ -71,7 +126,34 @@ HTML_TEMPLATE = """
         }
         .container { max-width: 650px; margin: 0 auto; }
         h1 { text-align: center; color: #ffca28; font-size: 26px; text-shadow: 2px 2px 4px #000; margin-bottom: 5px; }
-        .subtitle { text-align: center; color: #81c784; font-size: 14px; margin-bottom: 20px; }
+        
+        /* Стили меню выбора чатов */
+        .rooms-menu {
+            display: flex;
+            justify-content: center;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-bottom: 20px;
+            background: rgba(40, 40, 40, 0.9);
+            padding: 10px;
+            border-radius: 6px;
+            border: 1px solid #444;
+        }
+        .room-link {
+            color: #aaa;
+            text-decoration: none;
+            padding: 6px 12px;
+            border-radius: 4px;
+            font-size: 13px;
+            background: #222;
+            border: 1px solid #555;
+        }
+        .room-link.active {
+            color: #fff;
+            background: #ff8f00;
+            border-color: #ffca28;
+            font-weight: bold;
+        }
         
         form { 
             background: rgba(45, 45, 45, 0.85); 
@@ -81,7 +163,6 @@ HTML_TEMPLATE = """
             border: 1px solid #ffca28;
             box-shadow: 0 4px 15px rgba(0,0,0,0.5);
         }
-        
         .nickname-input {
             width: 100%;
             padding: 8px;
@@ -93,7 +174,6 @@ HTML_TEMPLATE = """
             font-weight: bold;
             box-sizing: border-box;
         }
-        
         textarea { 
             width: 100%; 
             padding: 10px; 
@@ -105,7 +185,6 @@ HTML_TEMPLATE = """
             box-sizing: border-box; 
             resize: vertical;
         }
-        
         .img-input-container { display: flex; gap: 5px; margin-bottom: 15px; }
         .img-input-container input { 
             flex: 1; 
@@ -125,7 +204,6 @@ HTML_TEMPLATE = """
             cursor: pointer; 
             font-weight: bold;
         }
-        
         .submit-btn { 
             width: 100%; 
             padding: 12px; 
@@ -137,7 +215,6 @@ HTML_TEMPLATE = """
             border-radius: 4px; 
             cursor: pointer; 
         }
-        .submit-btn:hover { background: #ff6f00; }
         
         .post { 
             background: rgba(40, 40, 40, 0.9); 
@@ -155,18 +232,25 @@ HTML_TEMPLATE = """
 <body>
     <div class="container">
         <h1>Мир Идиаканта</h1>
-        <div class="subtitle">※ Анонимный уголок тепла и ламповости ※</div>
         
-        <form method="POST" action="/create">
+        <div class="rooms-menu">
+            {% for r_id, r_name in rooms.items() %}
+                <a href="/room/{{ r_id }}" class="room-link {% if r_id == current_room %}active{% endif %}">
+                    {{ r_name }}
+                </a>
+            {% endfor %}
+        </div>
+        
+        <form method="POST" action="/create/{{ current_room }}">
             <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="Твой ник (оставь пустым для Анонима)..." maxlength="20">
-            <textarea name="text" rows="4" placeholder="Напиши что-нибудь в бред..." required></textarea>
+            <textarea name="text" rows="4" placeholder="Напиши что-нибудь в этот чат..." required></textarea>
             
             <div class="img-input-container">
                 <input type="url" id="image_url" name="image_url" placeholder="Ссылка на картинку (https://...)">
                 <button type="button" class="paste-btn" onclick="pasteFromClipboard()">📋 Вставить</button>
             </div>
             
-            <button type="submit" class="submit-btn" onclick="saveNick()">Отправить пост</button>
+            <button type="submit" class="submit-btn" onclick="saveNick()">Отправить в {{ room_title }}</button>
         </form>
 
         <div class="posts">
@@ -183,7 +267,7 @@ HTML_TEMPLATE = """
                 {% endif %}
             </div>
             {% else %}
-            <p style="text-align:center; color:#aaa;">Здесь пока пусто. Оставь первое сообщение!</p>
+            <p style="text-align:center; color:#aaa;">В этом чате ещё нет сообщений. Напиши первое!</p>
             {% endfor %}
         </div>
     </div>
@@ -219,16 +303,27 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT * FROM posts ORDER BY id DESC")
-    posts = cursor.fetchall()
-    cursor.close()
-    conn.close()
-    return render_template_string(HTML_TEMPLATE, posts=posts)
+    return redirect("/room/b")
 
-@app.route("/create", methods=["POST"])
-def create():
+@app.route("/room/<room_id>")
+def view_room(room_id):
+    if room_id not in ROOMS:
+        return redirect("/")
+    
+    posts = load_posts(room_id)
+    return render_template_string(
+        HTML_TEMPLATE, 
+        posts=posts, 
+        rooms=ROOMS, 
+        current_room=room_id, 
+        room_title=ROOMS[room_id]
+    )
+
+@app.route("/create/<room_id>", methods=["POST"])
+def create_post(room_id):
+    if room_id not in ROOMS:
+        return redirect("/")
+        
     text = request.form.get("text", "").strip()
     image_url = request.form.get("image_url", "").strip()
     nickname = request.form.get("nickname", "").strip()
@@ -244,20 +339,9 @@ def create():
             author_name = nickname
             
         current_date = datetime.now().strftime("%d.%m.%Y %H:%M")
+        save_post(room_id, author_name, text, valid_url, current_date)
         
-        conn = get_db_connection()
-        cursor = conn.cursor()
-        cursor.execute(
-            "INSERT INTO posts (author, text, image_url, date) VALUES (%s, %s, %s, %s)" 
-            if os.environ.get("DATABASE_URL") else 
-            "INSERT INTO posts (author, text, image_url, date) VALUES (?, ?, ?, ?)",
-            (author_name, text, valid_url, current_date)
-        )
-        conn.commit()
-        cursor.close()
-        conn.close()
-        
-    return redirect("/")
+    return redirect(f"/room/{room_id}")
 
 if __name__ == "__main__":
     init_db()
