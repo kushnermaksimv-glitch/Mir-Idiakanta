@@ -4,11 +4,12 @@ from flask import Flask, render_template_string, request, redirect
 
 app = Flask(__name__)
 
-# Храним посты прямо в памяти сервера (гарантирует работу без ошибки 500)
+# Храним посты прямо в памяти сервера
 POSTS_STORAGE = [
     {
         "id": 1,
-        "text": "Добро пожаловать в Мир Идиаканта! Борда успешно запущена. Ошибка 500 побеждена!",
+        "author": "Аноним #1",
+        "text": "Добро пожаловать в Мир Идиаканта! Теперь у каждого автора есть своё имя с ID.",
         "image_url": "https://images.prodia.xyz/8f772418-4a6c-48be-88be-9b34a15a0c02.png",
         "date": datetime.now().strftime("%d.%m.%Y %H:%M")
     }
@@ -96,6 +97,7 @@ HTML_TEMPLATE = """
             border-left: 5px solid #ff8f00; 
         }
         .post-header { font-size: 12px; color: #ffb74d; margin-bottom: 10px; border-bottom: 1px dashed #444; padding-bottom: 5px; }
+        .post-author { color: #81c784; font-weight: bold; }
         .post-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #f5f5f5; }
         .post-img { max-width: 100%; max-height: 350px; object-fit: contain; margin-top: 12px; border-radius: 4px; display: block; border: 1px solid #555; }
     </style>
@@ -119,7 +121,9 @@ HTML_TEMPLATE = """
         <div class="posts">
             {% for post in posts %}
             <div class="post">
-                <div class="post-header">Аноним №{{ post.id }} • {{ post.date }}</div>
+                <div class="post-header">
+                    <span class="post-author">{{ post.author }}</span> • №{{ post.id }} • {{ post.date }}
+                </div>
                 <div class="post-text">{{ post.text }}</div>
                 {% if post.image_url %}
                     <a href="{{ post.image_url }}" target="_blank">
@@ -151,7 +155,6 @@ HTML_TEMPLATE = """
 
 @app.route("/")
 def index():
-    # Показываем посты в обратном порядке (новые сверху)
     return render_template_string(HTML_TEMPLATE, posts=reversed(POSTS_STORAGE))
 
 @app.route("/create", methods=["POST"])
@@ -161,8 +164,11 @@ def create():
     
     if text:
         valid_url = image_url if image_url.startswith(("http://", "https://")) else None
+        next_id = len(POSTS_STORAGE) + 1
+        
         new_post = {
-            "id": len(POSTS_STORAGE) + 1,
+            "id": next_id,
+            "author": f"Аноним #{next_id}",  # Формируем имя с ID поста
             "text": text,
             "image_url": valid_url,
             "date": datetime.now().strftime("%d.%m.%Y %H:%M")
