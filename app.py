@@ -4,7 +4,7 @@ import json
 from datetime import datetime
 from flask import Flask, render_template_string, request, redirect
 
-# Пробуем импортировать psycopg2. Если библиотеки нет, сайт не упадёт!
+# Пробуем импортировать psycopg2 для работы с Supabase
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -14,12 +14,12 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Папка для локального сохранения сообщений
+# Папка для локального сохранения сообщений (если Supabase отключен)
 LOCAL_STORAGE_DIR = "rooms_data"
 if not os.path.exists(LOCAL_STORAGE_DIR):
     os.makedirs(LOCAL_STORAGE_DIR)
 
-# Наш расширенный список тематических чатов с красивыми иконками
+# Список наших тематических чатов
 ROOMS = {
     "b": "💬 Бред (Основной)",
     "games": "🎮 Игровой уголок",
@@ -30,7 +30,6 @@ ROOMS = {
 }
 
 def is_supabase_available():
-    # База доступна только если есть переменная окружения и установлен psycopg2
     return PSYCOPG2_AVAILABLE and (os.environ.get("DATABASE_URL") is not None)
 
 def get_db_connection():
@@ -55,9 +54,9 @@ def init_db():
             conn.commit()
             cursor.close()
             conn.close()
-            print("--- БАЗА ДАННЫХ SUPABASE ИНИЦИАЛИЗИРОВАНА ---")
+            print("--- БАЗА ДАННЫХ SUPABASE УСПЕШНО ИНИЦИАЛИЗИРОВАНА ---")
         except Exception as e:
-            print(f"Ошибка инициализации Supabase: {e}. Переходим на файлы.")
+            print(f"Ошибка инициализации Supabase: {e}. Работаем через файлы.")
 
 def load_posts(room_id):
     if is_supabase_available():
@@ -70,7 +69,7 @@ def load_posts(room_id):
             conn.close()
             return posts
         except Exception as e:
-            print(f"Ошибка чтения Supabase: {e}. Читаем файлы.")
+            print(f"Ошибка чтения Supabase: {e}. Переключаемся на файлы.")
     
     # Файловый резервный метод
     file_path = os.path.join(LOCAL_STORAGE_DIR, f"{room_id}.json")
@@ -98,7 +97,7 @@ def save_post(room_id, author, text, image_url, date_str):
         except Exception as e:
             print(f"Ошибка записи в Supabase: {e}. Пишем в файлы.")
             
-    # Файловый метод сохранения
+    # Локальное сохранение в JSON файлы
     posts = load_posts(room_id)
     new_id = len(posts) + 1
     new_post = {
@@ -116,9 +115,9 @@ def save_post(room_id, author, text, image_url, date_str):
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(posts, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"Не удалось сохранить файл локально: {e}")
+        print(f"Ошибка записи файла: {e}")
 
-# Современный мобильный тёмный интерфейс
+# Улучшенный HTML шаблон с исправленным сохранением ника и системой ответов
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -188,6 +187,8 @@ HTML_TEMPLATE = """
             border: 1px solid #2d2d2d;
         }
         .input-group { margin-bottom: 12px; }
+        
+        /* Исправленный инпут никнейма */
         .nickname-input {
             width: 100%;
             padding: 12px;
@@ -250,11 +251,41 @@ HTML_TEMPLATE = """
             margin-bottom: 8px; 
             display: flex; 
             justify-content: space-between;
+            align-items: center;
             border-bottom: 1px solid #2d2d2d;
             padding-bottom: 6px;
         }
         .author-badge { color: #81c784; font-weight: bold; }
-        .post-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+        
+        /* Метка текущего чата в посте */
+        .room-badge {
+            background: #333;
+            color: #ffb74d;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-size: 11px;
+            margin-left: 6px;
+        }
+        
+        .post-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #f5f5f5; }
+        
+        /* Кнопка ответа */
+        .post-footer {
+            margin-top: 10px;
+            display: flex;
+            justify-content: flex-end;
+        }
+        .btn-reply {
+            background: none;
+            border: none;
+            color: #26a69a;
+            cursor: pointer;
+            font-size: 13px;
+            font-weight: bold;
+            padding: 4px 8px;
+        }
+        .btn-reply:hover { color: #80cbc4; }
+
         .post-image-wrapper {
             margin-top: 12px;
             border-radius: 8px;
@@ -284,7 +315,7 @@ HTML_TEMPLATE = """
                 <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="🕶️ Твой никнейм (или Аноним)" maxlength="20">
             </div>
             <div class="input-group">
-                <textarea name="text" rows="3" placeholder="Напиши сообщение в этот чат..." required></textarea>
+                <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение в этот чат..." required></textarea>
             </div>
             <div class="input-group url-box">
                 <input type="url" id="image_url" name="image_url" placeholder="🔗 Ссылка на картинку">
@@ -297,10 +328,14 @@ HTML_TEMPLATE = """
             {% for post in posts %}
             <div class="post-card">
                 <div class="post-meta">
-                    <span class="author-badge">{{ post.author }}</span>
+                    <div>
+                        <span class="author-badge">{{ post.author }}</span>
+                        <span class="room-badge">{{ current_room_name }}</span>
+                    </div>
                     <span>№{{ post.id }} • {{ post.date }}</span>
                 </div>
                 <div class="post-text">{{ post.text }}</div>
+                
                 {% if post.image_url %}
                     <div class="post-image-wrapper">
                         <a href="{{ post.image_url }}" target="_blank">
@@ -308,23 +343,42 @@ HTML_TEMPLATE = """
                         </a>
                     </div>
                 {% endif %}
+                
+                <div class="post-footer">
+                    <button type="button" class="btn-reply" onclick="replyTo('{{ post.id }}', '{{ post.author }}')">↩ Ответить</button>
+                </div>
             </div>
             {% else %}
-            <p style="text-align:center; color:#666;">Тут пока пусто...</p>
+            <p style="text-align:center; color:#666;">Тут пока пусто... Начни общение первым!</p>
             {% endfor %}
         </div>
     </div>
 
     <script>
+        // Загрузка сохранённого ника при открытии страницы
         window.onload = function() {
-            if (localStorage.getItem('user_nick')) {
-                document.getElementById('nickname').value = localStorage.getItem('user_nick');
+            const savedNick = localStorage.getItem('user_nick');
+            if (savedNick) {
+                document.getElementById('nickname').value = savedNick;
             }
         }
+
+        // Функция сохранения ника в память телефона
         function saveNick() {
             const nick = document.getElementById('nickname').value;
             localStorage.setItem('user_nick', nick);
         }
+
+        // Функция для ответа на сообщение
+        function replyTo(postId, author) {
+            const textarea = document.getElementById('message_text');
+            // Форматируем ответ в виде цитаты
+            textarea.value = `>> №${postId} (${author}): ` + textarea.value;
+            textarea.focus();
+            // Скроллим телефон вверх к форме отправки
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+        }
+
         async function pasteFromClipboard() {
             try {
                 const text = await navigator.clipboard.readText();
@@ -347,7 +401,14 @@ def view_room(room_id):
     if room_id not in ROOMS:
         return redirect("/")
     posts = load_posts(room_id)
-    return render_template_string(HTML_TEMPLATE, posts=posts, rooms=ROOMS, current_room=room_id, room_title=ROOMS[room_id])
+    return render_template_string(
+        HTML_TEMPLATE, 
+        posts=posts, 
+        rooms=ROOMS, 
+        current_room=room_id, 
+        room_title=ROOMS[room_id],
+        current_room_name=ROOMS[room_id].split()[-1] # Получаем чистое имя без смайлика
+    )
 
 @app.route("/create/<room_id>", methods=["POST"])
 def create_post(room_id):
