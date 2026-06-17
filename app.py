@@ -14,10 +14,13 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Папка для локального сохранения сообщений (если Supabase отключен)
+# Папка для локального сохранения сообщений в формате JSON
 LOCAL_STORAGE_DIR = "rooms_data"
 if not os.path.exists(LOCAL_STORAGE_DIR):
     os.makedirs(LOCAL_STORAGE_DIR)
+
+# Имя текстового файла, куда будут сохраняться ВСЕ сообщения подряд
+LOG_FILE_PATH = "chat_log.txt"
 
 # Список наших тематических чатов
 ROOMS = {
@@ -28,6 +31,20 @@ ROOMS = {
     "memes": "🔥 Мемы и пикчи",
     "secret": "🔒 Секретная зона"
 }
+
+# Функция для сохранения сообщений в обычный красивый текстовый файл (.txt)
+def log_to_text_file(room_id, author, text, date_str):
+    try:
+        room_name = ROOMS.get(room_id, room_id)
+        # Форматируем строку для файла
+        log_line = f"[{date_str}] [{room_name}] {author}: {text}\n"
+        
+        # Открываем файл в режиме "a" (append) — это значит "дописать в конец файла"
+        with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
+            f.write(log_line)
+        print(f"Сообщение успешно записано в файл {LOG_FILE_PATH}")
+    except Exception as e:
+        print(f"Ошибка при записи в текстовый файл: {e}")
 
 def is_supabase_available():
     return PSYCOPG2_AVAILABLE and (os.environ.get("DATABASE_URL") is not None)
@@ -71,7 +88,7 @@ def load_posts(room_id):
         except Exception as e:
             print(f"Ошибка чтения Supabase: {e}. Переключаемся на файлы.")
     
-    # Файловый резервный метод
+    # Файловый резервный метод (JSON)
     file_path = os.path.join(LOCAL_STORAGE_DIR, f"{room_id}.json")
     if os.path.exists(file_path):
         try:
@@ -82,6 +99,10 @@ def load_posts(room_id):
     return []
 
 def save_post(room_id, author, text, image_url, date_str):
+    # 1. Сначала обязательно пишем в наш текстовый файл chat_log.txt!
+    log_to_text_file(room_id, author, text, date_str)
+    
+    # 2. Затем сохраняем в базу данных Supabase, если она подключена
     if is_supabase_available():
         try:
             conn = get_db_connection()
@@ -95,9 +116,9 @@ def save_post(room_id, author, text, image_url, date_str):
             conn.close()
             return
         except Exception as e:
-            print(f"Ошибка записи в Supabase: {e}. Пишем в файлы.")
+            print(f"Ошибка записи в Supabase: {e}. Пишем в JSON-файлы.")
             
-    # Локальное сохранение в JSON файлы
+    # 3. Если Supabase нет, сохраняем в структурированный JSON для вывода на сайт
     posts = load_posts(room_id)
     new_id = len(posts) + 1
     new_post = {
@@ -115,9 +136,9 @@ def save_post(room_id, author, text, image_url, date_str):
         with open(file_path, "w", encoding="utf-8") as f:
             json.dump(posts, f, ensure_ascii=False, indent=4)
     except Exception as e:
-        print(f"Ошибка записи файла: {e}")
+        print(f"Ошибка записи JSON файла: {e}")
 
-# Улучшенный HTML шаблон с исправленным сохранением ника и системой ответов
+# HTML шаблон интерфейса
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -187,8 +208,6 @@ HTML_TEMPLATE = """
             border: 1px solid #2d2d2d;
         }
         .input-group { margin-bottom: 12px; }
-        
-        /* Исправленный инпут никнейма */
         .nickname-input {
             width: 100%;
             padding: 12px;
@@ -256,8 +275,6 @@ HTML_TEMPLATE = """
             padding-bottom: 6px;
         }
         .author-badge { color: #81c784; font-weight: bold; }
-        
-        /* Метка текущего чата в посте */
         .room-badge {
             background: #333;
             color: #ffb74d;
@@ -266,10 +283,7 @@ HTML_TEMPLATE = """
             font-size: 11px;
             margin-left: 6px;
         }
-        
         .post-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #f5f5f5; }
-        
-        /* Кнопка ответа */
         .post-footer {
             margin-top: 10px;
             display: flex;
@@ -285,7 +299,6 @@ HTML_TEMPLATE = """
             padding: 4px 8px;
         }
         .btn-reply:hover { color: #80cbc4; }
-
         .post-image-wrapper {
             margin-top: 12px;
             border-radius: 8px;
@@ -355,30 +368,22 @@ HTML_TEMPLATE = """
     </div>
 
     <script>
-        // Загрузка сохранённого ника при открытии страницы
         window.onload = function() {
             const savedNick = localStorage.getItem('user_nick');
             if (savedNick) {
                 document.getElementById('nickname').value = savedNick;
             }
         }
-
-        // Функция сохранения ника в память телефона
         function saveNick() {
             const nick = document.getElementById('nickname').value;
             localStorage.setItem('user_nick', nick);
         }
-
-        // Функция для ответа на сообщение
         function replyTo(postId, author) {
             const textarea = document.getElementById('message_text');
-            // Форматируем ответ в виде цитаты
             textarea.value = `>> №${postId} (${author}): ` + textarea.value;
             textarea.focus();
-            // Скроллим телефон вверх к форме отправки
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
-
         async function pasteFromClipboard() {
             try {
                 const text = await navigator.clipboard.readText();
@@ -407,7 +412,7 @@ def view_room(room_id):
         rooms=ROOMS, 
         current_room=room_id, 
         room_title=ROOMS[room_id],
-        current_room_name=ROOMS[room_id].split()[-1] # Получаем чистое имя без смайлика
+        current_room_name=ROOMS[room_id].split()[-1]
     )
 
 @app.route("/create/<room_id>", methods=["POST"])
