@@ -13,10 +13,9 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Ограничиваем максимальный размер загружаемого файла до 5 Мегабайт, чтобы сервер не перегружался
-app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
+# Максимальный размер запроса (с запасом для сжатых Base64 фото)
+app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
 
-# Резервное хранилище в оперативной памяти (если Supabase не подключен)
 MEMORY_POSTS = {
     "b": [], "games": [], "code": [], "cats": [], "memes": [], "secret": []
 }
@@ -43,7 +42,7 @@ def init_db():
             conn = get_db_connection()
             if conn:
                 cursor = conn.cursor()
-                # Создаем таблицу. Теперь поле image_url может хранить и длинные Base64-строки картинок
+                # Перестраховка: создаем таблицу, если её нет. Тип TEXT в Postgres вмещает до 1 ГБ текста.
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS posts (
                         id SERIAL PRIMARY KEY,
@@ -102,7 +101,6 @@ def save_post(room_id, author, text, image_data, date_str):
             if conn:
                 conn.close()
 
-    # Резервный вариант в ОЗУ
     posts = MEMORY_POSTS.get(room_id, [])
     new_id = len(posts) + 1
     new_post = {
@@ -178,23 +176,19 @@ HTML_TEMPLATE = """
             background: #151515; color: #fff; font-size: 15px; resize: none;
         }
         
-        /* Стильный блок выбора файла */
-        .file-input-wrapper {
-            position: relative; overflow: hidden; display: inline-block; width: 100%;
-        }
+        .file-input-wrapper { position: relative; overflow: hidden; display: inline-block; width: 100%; }
         .btn-file {
             border: 1px dashed #555; color: #b0b0b0; background-color: #151515;
             padding: 12px; border-radius: 8px; font-size: 14px; font-weight: bold;
             display: block; text-align: center; cursor: pointer;
         }
-        .file-input-wrapper input[type=file] {
-            font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer;
-        }
+        .file-input-wrapper input[type=file] { font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; }
 
         .btn-submit { 
             width: 100%; padding: 14px; background: linear-gradient(135deg, #ffb74d, #ff9800); 
             border: none; color: #121212; font-weight: bold; font-size: 16px; border-radius: 8px; cursor: pointer; margin-top: 10px;
         }
+        
         .post-card { background: #1e1e1e; padding: 16px; border-radius: 12px; border: 1px solid #2d2d2d; margin-bottom: 12px; }
         .post-meta { 
             font-size: 12px; color: #777; margin-bottom: 8px; display: flex; justify-content: space-between;
@@ -252,14 +246,12 @@ HTML_TEMPLATE = """
             <div class="input-group">
                 <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение в этот чат..." required></textarea>
             </div>
-            
             <div class="input-group">
                 <div class="file-input-wrapper">
                     <span class="btn-file" id="file-label">🖼️ Прикрепить фото (до 5 МБ)</span>
-                    <input type="file" id="image_file" name="image_file" accept="image/*" onchange="updateFileLabel()">
+                    <input type="file" id="image_file" accept="image/*" onchange="updateFileLabel()">
                 </div>
             </div>
-            
             <button type="submit" class="btn-submit">Отправить сообщение</button>
         </form>
 
@@ -315,18 +307,16 @@ HTML_TEMPLATE = """
             setInterval(checkUpdates, 3000);
         }
 
-        // Показывает имя выбранного файла на кнопке
         function updateFileLabel() {
             const fileInput = document.getElementById('image_file');
             const label = document.getElementById('file-label');
             if (fileInput.files.length > 0) {
-                label.innerText = `✅ Выбрано: ${fileInput.files[0].name.id ? fileInput.files[0].name.substring(0,20) : fileInput.files[0].name}`;
-                label.style.borderColor = '#ff9800';
-                label.style.color = '#ffb74d';
+                let name = fileInput.files[0].name;
+                label.innerText = `✅ Выбрано: ${name.length > 20 ? name.substring(0,20) + '...' : name}`;
+                label.style.borderColor = '#ff9800'; label.style.color = '#ffb74d';
             } else {
                 label.innerText = "🖼️ Прикрепить фото (до 5 МБ)";
-                label.style.borderColor = '#555';
-                label.style.color = '#b0b0b0';
+                label.style.borderColor = '#555'; label.style.color = '#b0b0b0';
             }
         }
 
@@ -349,6 +339,38 @@ HTML_TEMPLATE = """
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
+        // УМНОЕ СЖАТИЕ КАРТИНКИ ПЕРЕД ОТПРАВКОЙ НА СЕРВЕР
+        function processImage(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = function (event) {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = function () {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 1000; // Ограничиваем ширину картинки до 1000px
+                        let width = img.width;
+                        let height = img.height;
+
+                        if (width > MAX_WIDTH) {
+                            height *= MAX_WIDTH / width;
+                            width = MAX_WIDTH;
+                        }
+                        canvas.width = width;
+                        canvas.height = height;
+
+                        const ctx = canvas.getContext('2d');
+                        ctx.drawImage(img, 0, 0, width, height);
+
+                        // Сжимаем качество до 70% в формат JPEG (весит в 20 раз меньше оригинала!)
+                        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+                        resolve(dataUrl);
+                    };
+                };
+            });
+        }
+
         async function sendPostViaAjax(event) {
             event.preventDefault();
             const textEl = document.getElementById('message_text');
@@ -362,20 +384,21 @@ HTML_TEMPLATE = """
             const formData = new FormData();
             formData.append('text', textEl.value);
             formData.append('nickname', nickEl.value);
+
+            // Если прикреплен файл, ждем его сжатия в Base64 текстовую строку
             if (fileEl.files.length > 0) {
-                formData.append('image_file', fileEl.files[0]);
+                const compressedBase64 = await processImage(fileEl.files[0]);
+                formData.append('image_base64', compressedBase64);
             }
 
             textEl.value = '';
             fileEl.value = '';
-            updateFileLabel(); // Сбрасываем текст кнопки файла
+            updateFileLabel();
 
             try {
                 await fetch(`/create/${currentRoom}`, { method: 'POST', body: formData });
                 checkUpdates();
-            } catch (e) {
-                console.error("Ошибка отправки:", e);
-            }
+            } catch (e) { console.error("Ошибка отправки:", e); }
         }
 
         async function checkUpdates() {
@@ -384,26 +407,19 @@ HTML_TEMPLATE = """
                 const latestIds = await response.json();
                 
                 const latestInCurrent = latestIds[currentRoom] || 0;
-                if (latestInCurrent > lastKnownPostId) {
-                    fetchNewPostsForCurrentRoom();
-                }
+                if (latestInCurrent > lastKnownPostId) { fetchNewPostsForCurrentRoom(); }
 
                 for (const roomId in latestIds) {
                     if (roomId !== currentRoom) {
                         const lastSeen = roomLastSeen[roomId] || 0;
                         const chip = document.getElementById(`room-link-${roomId}`);
                         if (chip) {
-                            if (latestIds[roomId] > lastSeen) {
-                                chip.classList.add('has-new');
-                            } else {
-                                chip.classList.remove('has-new');
-                            }
+                            if (latestIds[roomId] > lastSeen) { chip.classList.add('has-new'); } 
+                            else { chip.classList.remove('has-new'); }
                         }
                     }
                 }
-            } catch (e) {
-                console.error("Ошибка обновления", e);
-            }
+            } catch (e) { console.error("Ошибка обновления", e); }
         }
 
         async function fetchNewPostsForCurrentRoom() {
@@ -445,7 +461,7 @@ HTML_TEMPLATE = """
                                     <span class="author-badge">${post.author}</span>
                                     <span class="room-badge">${currentRoomName}</span>
                                 </div>
-                                <span>№${post.id} • {{ post.date }}</span>
+                                <span>№${post.id} • ${post.date}</span>
                             </div>
                             <div class="post-text" style="font-size: ${currentFontSize}">${post.text}</div>
                             ${imgHtml}
@@ -460,9 +476,7 @@ HTML_TEMPLATE = """
                     roomLastSeen[currentRoom] = lastKnownPostId;
                     localStorage.setItem('room_last_seen', JSON.stringify(roomLastSeen));
                 }
-            } catch (e) {
-                console.error("Ошибка загрузки новых постов:", e);
-            }
+            } catch (e) { console.error("Ошибка загрузки новых постов:", e); }
         }
     </script>
 </body>
@@ -504,19 +518,11 @@ def create_post(room_id):
     
     text = request.form.get("text", "").strip()
     nickname = request.form.get("nickname", "").strip()
-    file = request.files.get("image_file")
     
-    image_data_uri = None
-    
-    # Если файл прикреплен, кодируем его в Base64 текстовую строку
-    if file and file.filename != '':
-        try:
-            file_bytes = file.read()
-            encoded_string = base64.b64encode(file_bytes).decode('utf-8')
-            # Формируем Data URI строку, которую браузер легко превратит обратно в фото
-            image_data_uri = f"data:{file.mimetype};base64,{encoded_string}"
-        except Exception as e:
-            print(f"Ошибка обработки изображения: {e}")
+    # Теперь мы принимаем уже готовую, сжатую на клиенте строку Base64
+    image_data_uri = request.form.get("image_base64", "").strip()
+    if not image_data_uri:
+        image_data_uri = None
 
     if text:
         if not nickname:
