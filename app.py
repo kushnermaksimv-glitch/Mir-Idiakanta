@@ -30,13 +30,25 @@ ROOMS = {
 }
 
 PINNED_MESSAGES = {
-    "b": "Мир Идиаканта 2.0! Общайся, копи XP, зарабатывай Кото-Коины и покупай скины! 💬",
+    "b": "Мир Идиаканта 2.0! Общайся, копи XP, зарабатывай Кото-Коинов и покупай скины! 💬",
     "games": "Обсуждаем моды, сервера, Brawl Stars, Prism Launcher и создание игр! 🎮",
     "code": "Пишем код на Python, HTML/JS, создаём PyOS и фиксим баги вместе! 💻",
     "cats": "Комната для любителей пушистых! Украшай своего кота в магазине 🐱",
     "memes": "Сюда кидаем самые свежие и угарные пикчи 🔥",
-    "pm": "🔒 Твой приватный ящик. Здесь отображаются только диалоги с твоим участием."
+    "pm": "🔒 Абсолютно приватный ящик. Серверная защита: твои ЛС видишь только ты и твой собеседник."
 }
+
+# Набор встроенных стикеров для быстрой отправки
+STICKERS = [
+    {"emoji": "🐱🕶️", "name": "Крутой кот"},
+    {"emoji": "🐱💻", "name": "Кот-кодер"},
+    {"emoji": "🐱🔥", "name": "Эпик кот"},
+    {"emoji": "🐱🍕", "name": "Жрущий кот"},
+    {"emoji": "👑🐱", "name": "Царь-кот"},
+    {"emoji": "👾", "name": "Стикер Игры"},
+    {"emoji": "💥", "name": "Бум!"},
+    {"emoji": "💀", "name": "Мертвец"}
+]
 
 def get_db_connection():
     db_url = os.environ.get("DATABASE_URL")
@@ -72,14 +84,24 @@ def init_db():
             print(f"Ошибка инициализации базы: {e}")
             if conn: conn.close()
 
-def load_posts(room_id):
+def load_posts(room_id, current_user=""):
+    current_user = current_user.strip()
     if PSYCOPG2_AVAILABLE:
         conn = None
         try:
             conn = get_db_connection()
             if conn:
                 cursor = conn.cursor()
-                cursor.execute("SELECT * FROM posts WHERE room = %s ORDER BY id DESC", (room_id,))
+                if room_id == "pm":
+                    # ЗАЩИТА НА УРОВНЕ СЕРВЕРА: Получаем ЛС только где юзер — автор ИЛИ получатель
+                    cursor.execute("""
+                        SELECT * FROM posts 
+                        WHERE room = 'pm' AND (author = %s OR recipient = %s) 
+                        ORDER BY id DESC
+                    """, (current_user, current_user))
+                else:
+                    cursor.execute("SELECT * FROM posts WHERE room = %s ORDER BY id DESC", (room_id,))
+                
                 posts = cursor.fetchall()
                 cursor.close()
                 conn.close()
@@ -95,36 +117,11 @@ def load_posts(room_id):
             print(f"Ошибка чтения базы: {e}")
             if conn: conn.close()
                 
-    return MEMORY_POSTS.get(room_id, [])
-
-def load_all_private_posts():
-    """Загружает все ЛС для фильтрации на стороне сервера/клиента"""
-    if PSYCOPG2_AVAILABLE:
-        conn = None
-        try:
-            conn = get_db_connection()
-            if conn:
-                cursor = conn.cursor()
-                cursor.execute("SELECT * FROM posts WHERE is_private = TRUE ORDER BY id DESC")
-                posts = cursor.fetchall()
-                cursor.close()
-                conn.close()
-                for p in posts:
-                    if isinstance(p['reactions'], str):
-                        try: p['reactions'] = json.loads(p['reactions'])
-                        except: p['reactions'] = {"❤️": 0, "🔥": 0, "😂": 0, "💀": 0}
-                return posts
-        except Exception as e:
-            if conn: conn.close()
-    
-    # Для памяти: собираем из всех комнат то, что помечено как ЛС
-    all_pms = []
-    for r in MEMORY_POSTS:
-        for p in MEMORY_POSTS[r]:
-            if p.get("is_private"):
-                all_pms.append(p)
-    all_pms.sort(key=lambda x: x["id"], reverse=True)
-    return all_pms
+    # Логика для локальной памяти (если БД недоступна)
+    all_posts = MEMORY_POSTS.get(room_id, [])
+    if room_id == "pm":
+        return [p for p in all_posts if p.get("author") == current_user or p.get("recipient") == current_user]
+    return all_posts
 
 def save_post(room_id, author, text, image_data, date_str, is_private=False, recipient=""):
     default_reactions = json.dumps({"❤️": 0, "🔥": 0, "😂": 0, "💀": 0})
@@ -196,7 +193,7 @@ HTML_TEMPLATE = """
         
         .pinned-box {
             background: var(--bg-card); border-left: 4px solid var(--accent); padding: 10px;
-            border-radius: 0 8px 8px 0; margin-bottom: 12px; font-size: 13px; border: 1px solid var(--border); border-left: 4px solid var(--accent);
+            border-radius: 0 8px 8px 0; margin-bottom: 12px; font-size: 13px; border: 1px solid var(--border);
         }
 
         .rooms-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 12px; }
@@ -206,7 +203,7 @@ HTML_TEMPLATE = """
         }
         .room-chip.active { color: #121212; background: linear-gradient(135deg, #ffb74d, #ff9800); border-color: #ff9800; font-weight: bold; }
 
-        /* Игровой профиль */
+        /* Профиль */
         .profile-card {
             background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: 8px; margin-bottom: 10px;
             display: flex; align-items: center; gap: 12px;
@@ -215,7 +212,7 @@ HTML_TEMPLATE = """
         .coin-count { color: #ffd54f; font-weight: bold; }
         .xp-count { color: #64b5f6; font-weight: bold; }
 
-        /* Кот-Маркет */
+        /* Маркет */
         .market-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 8px; }
         .market-item {
             background: var(--bg-input); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center; font-size: 12px;
@@ -233,6 +230,23 @@ HTML_TEMPLATE = """
         
         .btn-submit { width: 100%; padding: 12px; background: linear-gradient(135deg, #ffb74d, #ff9800); border: none; color: #121212; font-weight: bold; border-radius: 6px; cursor: pointer; }
         
+        /* Новое меню файлов */
+        .media-menu-container { margin: 8px 0; }
+        .btn-trigger-media {
+            background: var(--bg-input); border: 1px solid var(--border); color: var(--accent-light);
+            padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold; display: inline-flex; align-items: center; gap: 5px;
+        }
+        .media-options-box {
+            background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 6px; display: none; gap: 8px; flex-wrap: wrap;
+        }
+        .media-opt-btn {
+            background: var(--bg-card); border: 1px solid var(--border); color: var(--text-main); padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px;
+        }
+        .media-opt-btn:hover { border-color: var(--accent); }
+        .sticker-panel { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px; }
+        .sticker-item { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 6px; text-align: center; font-size: 20px; cursor: pointer; }
+        .sticker-item:hover { transform: scale(1.1); border-color: var(--accent); }
+
         /* Карточки постов */
         .post-card { background: var(--bg-card); padding: 14px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 10px; position: relative; }
         .post-card.private-messages { background: var(--bg-private) !important; border-color: var(--border-private) !important; }
@@ -262,6 +276,8 @@ HTML_TEMPLATE = """
         
         .post-image-wrapper { margin-top: 8px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
         .post-img { width: 100%; max-height: 300px; object-fit: contain; display: block; }
+        
+        .hidden-input { display: none; }
     </style>
 </head>
 <body>
@@ -320,14 +336,16 @@ HTML_TEMPLATE = """
             </select>
         </div>
 
+        <!-- Список комнат -->
         <div class="rooms-scroll">
             {% for r_id, r_name in rooms.items() %}
-                <a href="/room/{{ r_id }}" id="room-link-{{ r_id }}" class="room-chip {% if r_id == current_room %}active{% endif %}">
+                <button onclick="changeRoom('{{ r_id }}')" id="room-link-{{ r_id }}" class="room-chip {% if r_id == current_room %}active{% endif %}">
                     {{ r_name }}
-                </a>
+                </button>
             {% endfor %}
         </div>
         
+        <!-- Форма отправки -->
         <form class="post-form" id="chatForm" onsubmit="sendPostViaAjax(event)">
             <div id="pmIndicator" class="pm-selector" style="display: none;">
                 <span>🔒 Личное сообщение для: <span id="pmTarget" style="color:#e040fb;">Ник</span></span>
@@ -350,15 +368,32 @@ HTML_TEMPLATE = """
             <div style="margin-bottom: 8px;">
                 <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение..." required></textarea>
             </div>
-            <div style="margin-bottom: 8px;">
-                <div class="file-input-wrapper">
-                    <span class="btn-file" id="file-label">🖼️ Прикрепить фото</span>
-                    <input type="file" id="image_file" accept="image/*" onchange="updateFileLabel()">
+
+            <!-- Кнопка Добавить файл и выпадающее меню -->
+            <div class="media-menu-container">
+                <button type="button" class="btn-trigger-media" onclick="toggleMediaMenu()">📎 Добавить файл <span id="media-status" style="color:#81c784;"></span></button>
+                
+                <div class="media-options-box" id="mediaBox">
+                    <button type="button" class="media-opt-btn" onclick="triggerFileInput('gallery')">🖼️ Фото (Галерея)</button>
+                    <button type="button" class="media-opt-btn" onclick="triggerFileInput('camera')">📷 Камера</button>
+                    <button type="button" class="media-opt-btn" onclick="toggleStickers()">✨ Стикеры</button>
+                    
+                    <!-- Скрытые инпуты захвата файлов -->
+                    <input type="file" id="file_gallery" class="hidden-input" accept="image/*" onchange="handleMediaSelect(this)">
+                    <input type="file" id="file_camera" class="hidden-input" accept="image/*" capture="environment" onchange="handleMediaSelect(this)">
+                    
+                    <div class="sticker-panel" id="stickerPanel" style="display:none;">
+                        {% for st в stickers %}
+                        <div class="sticker-item" onclick="sendStickerDirectly('{{ st.emoji }}')">{{ st.emoji }}</div>
+                        {% endfor %}
+                    </div>
                 </div>
             </div>
+
             <button type="submit" class="btn-submit">Отправить сообщение (+15XP, +5💰)</button>
         </form>
 
+        <!-- Список постов -->
         <div class="posts-list" id="postsList">
             {% for post in posts %}
             <div class="post-card {% if post.is_private %}private-messages{% endif %}" data-post-id="{{ post.id }}" id="post-{{ post.id }}" data-author="{{ post.author }}">
@@ -411,6 +446,7 @@ HTML_TEMPLATE = """
     <script>
         const currentRoom = "{{ current_room }}";
         let lastKnownPostId = {% if posts %}{{ posts[0].id }}{% else %}0{% endif %};
+        let globalSelectedImageBase64 = null;
         
         let myProfile = JSON.parse(localStorage.getItem('koto_profile') || '{"xp":0,"coins":20,"lvl":1,"items":[]}');
 
@@ -427,12 +463,19 @@ HTML_TEMPLATE = """
             document.getElementById('nickname').oninput = function() {
                 localStorage.setItem('user_nick', this.value);
                 checkAdminStatus(this.value);
+                // Перезагрузить страницу с новым ником в параметрах, чтобы сервер отдал корректные ЛС
+                if (currentRoom === 'pm') { changeRoom('pm'); }
             };
 
             applySettings();
             formatRepliesInDOM();
             applyPurchasedSkins();
             setInterval(checkUpdates, 3000);
+        }
+
+        function changeRoom(roomId) {
+            const nick = localStorage.getItem('user_nick') || '';
+            window.location.href = `/room/${roomId}?user=${encodeURIComponent(nick)}`;
         }
 
         function checkAdminStatus(nick) {
@@ -446,6 +489,29 @@ HTML_TEMPLATE = """
             document.getElementById('profLvl').innerText = myProfile.lvl;
             document.getElementById('profXp').innerText = myProfile.xp;
             document.getElementById('profCoins').innerText = myProfile.coins;
+        }
+
+        function toggleMediaMenu() {
+            const m = document.getElementById('mediaBox');
+            m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+        }
+
+        function toggleStickers() {
+            const p = document.getElementById('stickerPanel');
+            p.style.display = p.style.display === 'grid' ? 'none' : 'grid';
+        }
+
+        function triggerFileInput(type) {
+            if(type === 'gallery') document.getElementById('file_gallery').click();
+            if(type === 'camera') document.getElementById('file_camera').click();
+        }
+
+        async function handleMediaSelect(inputEl) {
+            if(inputEl.files.length > 0) {
+                globalSelectedImageBase64 = await processImage(inputEl.files[0]);
+                document.getElementById('media-status').innerText = "(📎 Файл добавлен)";
+                document.getElementById('mediaBox').style.display = 'none';
+            }
         }
 
         function buyItem(itemId, cost) {
@@ -523,12 +589,6 @@ HTML_TEMPLATE = """
             document.querySelectorAll('.post-text').forEach(el => el.style.fontSize = size);
         }
 
-        function updateFileLabel() {
-            const f = document.getElementById('image_file');
-            const l = document.getElementById('file-label');
-            if (f.files.length > 0) { l.innerText = "✅ Фото выбрано"; }
-        }
-
         function formatRepliesInDOM() {
             document.querySelectorAll('.post-text').forEach(el => {
                 el.innerHTML = el.innerHTML.replace(/>&gt;\s*№\s*(\d+)/g, function(match, id) {
@@ -574,19 +634,46 @@ HTML_TEMPLATE = """
                         if (w > MAX_WIDTH) { h *= MAX_WIDTH / w; w = MAX_WIDTH; }
                         canvas.width = w; canvas.height = h;
                         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                        resolve(canvas.toDataURL('image/jpeg', 0.7));
+                        resolve(canvas.width > 0 ? canvas.toDataURL('image/jpeg', 0.7) : null);
                     };
                 };
             });
         }
 
+        async function sendStickerDirectly(emoji) {
+            const nickEl = document.getElementById('nickname');
+            const formData = new FormData();
+            formData.append('text', ` [Стикер ${emoji}] `);
+            formData.append('nickname', nickEl.value);
+
+            let isPrivate = document.getElementById("is_private").value;
+            let rcpt = document.getElementById("recipient").value;
+
+            if (currentRoom === 'pm') {
+                isPrivate = "1";
+                rcpt = document.getElementById("direct_recipient").value;
+                if(!rcpt) { alert("Укажите ник получателя для отправки стикера!"); return; }
+            }
+
+            formData.append('is_private', isPrivate);
+            formData.append('recipient', rcpt);
+
+            document.getElementById('mediaBox').style.display = 'none';
+
+            try {
+                await fetch(`/create/${currentRoom}`, { method: 'POST', body: formData });
+                myProfile.xp += 15; myProfile.coins += 5;
+                checkLvlUp(); saveProfile(); updateProfileUI();
+                checkUpdates();
+            } catch (e) { console.error(e); }
+        }
+
         async function sendPostViaAjax(event) {
             event.preventDefault();
             const textEl = document.getElementById('message_text');
-            const fileEl = document.getElementById('image_file');
             const nickEl = document.getElementById('nickname');
             
-            if(textEl.value.trim() === "") return;
+            if(textEl.value.trim() === "" && !globalSelectedImageBase64) return;
 
             const formData = new FormData();
             formData.append('text', textEl.value);
@@ -595,22 +682,22 @@ HTML_TEMPLATE = """
             let isPrivate = document.getElementById("is_private").value;
             let rcpt = document.getElementById("recipient").value;
 
-            // Если сидим в комнате PM, берем получателя из текстового поля
             if (currentRoom === 'pm') {
                 isPrivate = "1";
-                rcpt = document.getElementById("direct_recipient").value.strip || document.getElementById("direct_recipient").value;
+                rcpt = document.getElementById("direct_recipient").value;
                 if(!rcpt) { alert("Укажите ник получателя личного сообщения!"); return; }
             }
 
             formData.append('is_private', isPrivate);
             formData.append('recipient', rcpt);
 
-            if (fileEl.files.length > 0) {
-                const comp = await processImage(fileEl.files[0]);
-                formData.append('image_base64', comp);
+            if (globalSelectedImageBase64) {
+                formData.append('image_base64', globalSelectedImageBase64);
             }
 
-            textEl.value = ''; fileEl.value = ''; disablePM(); updateFileLabel();
+            textEl.value = ''; disablePM();
+            globalSelectedImageBase64 = null;
+            document.getElementById('media-status').innerText = "";
             if(document.getElementById("direct_recipient")) document.getElementById("direct_recipient").value = '';
 
             try {
@@ -623,7 +710,8 @@ HTML_TEMPLATE = """
 
         async function checkUpdates() {
             try {
-                const response = await fetch('/api/get_latest_ids');
+                const myNick = localStorage.getItem('user_nick') || '';
+                const response = await fetch(`/api/get_latest_ids?user=${encodeURIComponent(myNick)}`);
                 const latestIds = await response.json();
                 const latestInCurrent = latestIds[currentRoom] || 0;
                 if (latestInCurrent > lastKnownPostId) { fetchNewPostsForCurrentRoom(); }
@@ -632,14 +720,16 @@ HTML_TEMPLATE = """
 
         async function fetchNewPostsForCurrentRoom() {
             try {
-                const response = await fetch(`/api/get_posts/${currentRoom}?user=${encodeURIComponent(localStorage.getItem('user_nick') || '')}`);
+                const myNick = localStorage.getItem('user_nick') || '';
+                const response = await fetch(`/api/get_posts/${currentRoom}?user=${encodeURIComponent(myNick)}`);
                 const posts = await response.json();
                 const postsList = document.getElementById('postsList');
                 const newPosts = posts.filter(p => p.id > lastKnownPostId);
-                const myNick = localStorage.getItem('user_nick') || '';
                 
                 if (newPosts.length > 0) {
                     newPosts.forEach(post => {
+                        if (document.getElementById(`post-${post.id}`)) return;
+                        
                         const card = document.createElement('div');
                         card.className = `post-card ${post.is_private ? 'private-messages' : ''}`;
                         card.id = `post-${post.id}`;
@@ -699,12 +789,10 @@ HTML_TEMPLATE = """
 
 @app.route("/api/get_latest_ids")
 def api_get_latest_ids():
+    user_nick = request.args.get("user", "").strip()
     ids = {}
     for r_id in ROOMS:
-        if r_id == "pm":
-            posts = load_all_private_posts()
-        else:
-            posts = load_posts(r_id)
+        posts = load_posts(r_id, current_user=user_nick)
         ids[r_id] = posts[0]["id"] if posts else 0
     return jsonify(ids)
 
@@ -712,14 +800,7 @@ def api_get_latest_ids():
 def api_get_posts(room_id):
     if room_id not in ROOMS: return jsonify([])
     user_nick = request.args.get("user", "").strip()
-    
-    if room_id == "pm":
-        all_pms = load_all_private_posts()
-        # Фильтруем приватные посты на сервере: только отправленные юзером или предназначенные ему
-        filtered = [p for p in all_pms if p["author"] == user_nick or p["recipient"] == user_nick]
-        return jsonify(filtered)
-        
-    return jsonify(load_posts(room_id))
+    return jsonify(load_posts(room_id, current_user=user_nick))
 
 @app.route("/api/delete/<int:post_id>", methods=["POST"])
 def api_delete_post(post_id):
@@ -771,20 +852,14 @@ def index(): return redirect("/room/b")
 @app.route("/room/<room_id>")
 def view_room(room_id):
     if room_id not in ROOMS: return redirect("/")
+    user_nick = request.args.get("user", "").strip()
     
-    user_nick = request.args.get("user", "").strip() # Если передано в URL
-    
-    if room_id == "pm":
-        all_pms = load_all_private_posts()
-        # В шаблоне первоначальный рендеринг тоже фильтрует (хотя основной упор идет на JS-обновление)
-        posts = all_pms # Фронтенд дополнительно отфильтрует по localStorage
-    else:
-        posts = load_posts(room_id)
+    posts = load_posts(room_id, current_user=user_nick)
         
     return render_template_string(
         HTML_TEMPLATE, posts=posts, rooms=ROOMS, current_room=room_id, 
         room_title=ROOMS[room_id], current_room_name=ROOMS[room_id].split()[-1],
-        pinned_msg=PINNED_MESSAGES.get(room_id, ""), admin_pwd=ADMIN_PASSWORD
+        pinned_msg=PINNED_MESSAGES.get(room_id, ""), admin_pwd=ADMIN_PASSWORD, stickers=STICKERS
     )
 
 @app.route("/create/<room_id>", methods=["POST"])
@@ -797,7 +872,7 @@ def create_post(room_id):
     is_private = request.form.get("is_private") == "1" or room_id == "pm"
     recipient = request.form.get("recipient", "").strip()
 
-    if text:
+    if text or image_data_uri:
         if not nickname:
             user_ip = request.headers.get('X-Forwarded-For', request.remote_addr) or "127.0.0.1"
             user_id = hashlib.md5(user_ip.encode()).hexdigest()[:4].upper()
@@ -805,12 +880,11 @@ def create_post(room_id):
         else: author_name = nickname
         
         current_date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        
-        # Если пишем прямо в комнате ЛС, перезаписываем целевую комнату на специальный тег pm
         target_room = "pm" if is_private else room_id
+        
         save_post(target_room, author_name, text, image_data_uri, current_date, is_private, recipient)
         
-    return redirect(f"/room/{room_id}")
+    return redirect(f"/room/{room_id}?user={nickname}")
 
 if __name__ == "__main__":
     init_db()
