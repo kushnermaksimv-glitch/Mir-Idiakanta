@@ -1,0 +1,624 @@
+<!DOCTYPE html>
+<html lang="ru" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Мир Идиаканта 2.0 — {{ room_title }}</title>
+    <style>
+        [data-theme="dark"] {
+            --bg-main: #0f0f12; --bg-card: #16161f; --bg-header: #1a1a26; --bg-input: #111116;
+            --text-main: #f0f0f5; --text-muted: #62627a; --border: #232334; --accent: #ff9800; --accent-light: #ffb74d;
+            --bg-private: #211330; --border-private: #7b1fa2;
+        }
+        [data-theme="light"] {
+            --bg-main: #f4f4f9; --bg-card: #ffffff; --bg-header: #ffffff; --bg-input: #edf0f5;
+            --text-main: #1c1c24; --text-muted: #84849a; --border: #dcdce6; --accent: #e07b00; --accent-light: #ff9800;
+            --bg-private: #f3e5f5; --border-private: #ba68c8;
+        }
+
+        * { box-sizing: border-box; transition: background 0.2s, color 0.2s; }
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
+            background: var(--bg-main); color: var(--text-main); padding: 0; margin: 0; font-size: 15px;
+        }
+        .app-header {
+            background: var(--bg-header); border-bottom: 2px solid var(--accent); padding: 12px 15px;
+            display: flex; justify-content: space-between; align-items: center;
+            position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+        }
+        .app-header h1 { margin: 0; font-size: 17px; color: var(--accent-light); }
+        .header-btns { display: flex; gap: 8px; }
+        .btn-toggle {
+            background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main);
+            padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold;
+        }
+        .container { max-width: 600px; margin: 0 auto; padding: 12px; }
+        
+        .pinned-box {
+            background: var(--bg-card); border-left: 4px solid var(--accent); padding: 10px;
+            border-radius: 0 8px 8px 0; margin-bottom: 12px; font-size: 13px; border: 1px solid var(--border);
+        }
+
+        .rooms-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 12px; }
+        .room-chip {
+            background: var(--bg-card); color: var(--text-muted); text-decoration: none; padding: 8px 14px;
+            border-radius: 20px; font-size: 13px; white-space: nowrap; border: 1px solid var(--border); cursor: pointer;
+        }
+        .room-chip.active { color: #121212; background: linear-gradient(135deg, #ffb74d, #ff9800); border-color: #ff9800; font-weight: bold; }
+
+        .profile-card {
+            background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: 8px; margin-bottom: 10px;
+            display: flex; align-items: center; gap: 12px;
+        }
+        .stats-block { font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+        .coin-count { color: #ffd54f; font-weight: bold; }
+        .xp-count { color: #64b5f6; font-weight: bold; }
+
+        .market-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 8px; }
+        .market-item {
+            background: var(--bg-input); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center; font-size: 12px;
+        }
+        .btn-buy { background: #4caf50; border: none; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; margin-top: 4px; }
+
+        .post-form { background: var(--bg-card); padding: 14px; border-radius: 12px; margin-bottom: 15px; border: 1px solid var(--border); }
+        .pm-selector {
+            background: rgba(123, 31, 162, 0.15); border: 1px solid var(--border-private); padding: 8px; border-radius: 6px; margin-bottom: 8px;
+            font-size: 13px; display: flex; align-items: center; justify-content: space-between; color: #ba68c8; font-weight: bold;
+        }
+
+        .nickname-input { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-input); color: #81c784; font-weight: bold; margin-bottom: 8px; }
+        textarea { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-main); font-size: 14px; resize: none; }
+        
+        .btn-submit { width: 100%; padding: 12px; background: linear-gradient(135deg, #ffb74d, #ff9800); border: none; color: #121212; font-weight: bold; border-radius: 6px; cursor: pointer; }
+        
+        /* Медиа-меню */
+        .media-menu-container { margin: 8px 0; }
+        .btn-trigger-media {
+            background: var(--bg-input); border: 1px solid var(--border); color: var(--accent-light);
+            padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold; display: inline-flex; align-items: center; gap: 5px;
+        }
+        .media-options-box {
+            background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 6px; display: none; gap: 8px; flex-wrap: wrap; flex-direction: column;
+        }
+        .media-buttons-row { display: flex; gap: 8px; flex-wrap: wrap; }
+        .media-opt-btn {
+            background: var(--bg-card); border: 1px solid var(--border); color: var(--text-main); padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px;
+        }
+        .media-opt-btn:hover { border-color: var(--accent); }
+        .sticker-panel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px; width: 100%; }
+        .sticker-item { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 6px; text-align: center; font-size: 20px; cursor: pointer; }
+        .sticker-item:hover { transform: scale(1.1); border-color: var(--accent); }
+
+        /* Карточки постов */
+        .post-card { background: var(--bg-card); padding: 14px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 10px; position: relative; }
+        .post-card.private-messages { background: var(--bg-private) !important; border-color: var(--border-private) !important; }
+        .post-card.gold-skin { background: linear-gradient(135deg, #2c2205, #141002) !important; border-color: #ffd54f !important; box-shadow: 0 0 10px rgba(255,213,79,0.2); }
+        
+        .post-header-layout { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+        .avatar-container { position: relative; width: 40px; height: 40px; }
+        .avatar-img { width: 100%; height: 100%; border-radius: 50%; background: #2a2a2a; }
+        .decor-item { position: absolute; top: -5px; right: -5px; font-size: 16px; }
+        .decor-glasses { position: absolute; top: 12px; left: 6px; font-size: 16px; width: 28px; text-align: center; }
+
+        .post-meta-info { flex-grow: 1; display: flex; flex-direction: column; font-size: 12px; }
+        .author-badge { color: #81c784; font-weight: bold; }
+        .level-badge { background: #333; color: #64b5f6; font-size: 10px; padding: 1px 4px; border-radius: 3px; margin-left: 4px; }
+        .room-badge { background: var(--bg-input); color: var(--accent-light); padding: 1px 4px; border-radius: 4px; font-size: 10px; width: fit-content; }
+        .post-id-date { color: var(--text-muted); font-size: 11px; text-align: right; }
+        
+        .post-text { font-size: 14.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+        .reply-link { color: var(--accent); text-decoration: none; font-weight: bold; }
+
+        .post-footer-layout { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
+        .reactions-bar { display: flex; gap: 4px; }
+        .btn-react { background: var(--bg-input); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; font-size: 11px; cursor: pointer; color: var(--text-main); }
+        .btn-reply, .btn-pm, .btn-admin-del { background: none; border: none; color: #26a69a; cursor: pointer; font-size: 12px; font-weight: bold; }
+        .btn-pm { color: #ba68c8; }
+        .btn-admin-del { color: #ff5252; margin-left: 10px; }
+        
+        .post-image-wrapper { margin-top: 8px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+        .post-img { width: 100%; max-height: 300px; object-fit: contain; display: block; }
+        
+        .hidden-input { display: none; }
+    </style>
+</head>
+<body>
+
+    <div class="app-header">
+        <h1>Мир Идиаканта 2.0</h1>
+        <div class="header-btns">
+            <button class="btn-toggle" onclick="toggleTheme()">🌗 Тема</button>
+            <button class="btn-toggle" onclick="toggleSettings()">⚙️ Меню</button>
+        </div>
+    </div>
+    
+    <div class="container">
+        
+        {% if pinned_msg %}
+        <div class="pinned-box">
+            📌 <b>Закреплено:</b> {{ pinned_msg }}
+        </div>
+        {% endif %}
+
+        <div id="settingsPanel" style="background: var(--bg-card); border: 1px solid var(--border); padding: 12px; border-radius: 10px; margin-bottom: 12px; display: none;">
+            <h3 style="margin: 0 0 8px 0; font-size: 14px; color: var(--accent-light);">🎒 Твой Кото-Профиль:</h3>
+            <div class="profile-card">
+                <div class="stats-block">
+                    <div>Уровень: <span id="profLvl" style="font-weight:bold; color:#64b5f6;">1</span></div>
+                    <div>Опыт: <span id="profXp" class="xp-count">0</span> XP</div>
+                    <div>Баланс: <span id="profCoins" class="coin-count">0</span> 💰 Кото-Коинов</div>
+                </div>
+            </div>
+
+            <h3 style="margin: 8px 0 4px 0; font-size: 14px; color: #4caf50;">🛒 Кот-Маркет:</h3>
+            <div class="market-grid">
+                <div class="market-item">
+                    <span>👓 Крутые Очки</span><br><strong class="coin-count">50 💰</strong><br>
+                    <button class="btn-buy" onclick="buyItem('glasses', 50)">Купить</button>
+                </div>
+                <div class="market-item">
+                    <span>🎩 Цилиндр</span><br><strong class="coin-count">100 💰</strong><br>
+                    <button class="btn-buy" onclick="buyItem('hat', 100)">Купить</button>
+                </div>
+                <div class="market-item">
+                    <span>🎭 Маска SCP-035</span><br><strong class="coin-count">200 💰</strong><br>
+                    <button class="btn-buy" onclick="buyItem('mask', 200)">Купить</button>
+                </div>
+                <div class="market-item">
+                    <span>✨ Золотая Карточка</span><br><strong class="coin-count">400 💰</strong><br>
+                    <button class="btn-buy" onclick="buyItem('gold', 400)">Купить</button>
+                </div>
+            </div>
+
+            <h3 style="margin: 12px 0 6px 0; font-size: 14px; color: var(--text-muted);">Размер шрифта:</h3>
+            <select id="settingFontSize" onchange="applySettings()" style="width:100%; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border); padding:6px; border-radius:4px;">
+                <option value="14px">Мелкий</option>
+                <option value="15px" selected>Обычный</option>
+                <option value="17px">Крупный</option>
+            </select>
+        </div>
+
+        <div class="rooms-scroll">
+            {% for r_id, r_name in rooms.items() %}
+                <button type="button" onclick="changeRoom('{{ r_id }}')" id="room-link-{{ r_id }}" class="room-chip {% if r_id == current_room %}active{% endif %}">
+                    {{ r_name }}
+                </button>
+            {% endfor %}
+        </div>
+        
+        <form class="post-form" id="chatForm" onsubmit="sendPostViaAjax(event)">
+            <div id="pmIndicator" class="pm-selector" style="display: none;">
+                <span>🔒 Личное сообщение для: <span id="pmTarget" style="color:#e040fb;">Ник</span></span>
+                <button type="button" style="background:none; border:none; color:#ff5252; cursor:pointer; font-weight:bold;" onclick="disablePM()">❌ Отмена</button>
+            </div>
+
+            <input type="hidden" id="is_private" name="is_private" value="{% if current_room == 'pm' %}1{% else %}0{% endif %}">
+            <input type="hidden" id="recipient" name="recipient" value="">
+
+            <div style="margin-bottom: 8px;">
+                <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="🕶️ Твой никнейм (или Аноним)" maxlength="20">
+            </div>
+
+            {% if current_room == 'pm' %}
+            <div style="margin-bottom: 8px;" id="recipientFieldBox">
+                <input type="text" id="direct_recipient" name="direct_recipient" class="nickname-input" style="color:#e040fb; border-color:var(--border-private);" placeholder="👤 Кому отправить ЛС? (Введите точный ник)" maxlength="20">
+            </div>
+            {% endif %}
+
+            <div style="margin-bottom: 8px;">
+                <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение..."></textarea>
+            </div>
+
+            <div class="media-menu-container">
+                <button type="button" class="btn-trigger-media" onclick="toggleMediaMenu()">📎 Добавить файл <span id="media-status" style="color:#81c784;"></span></button>
+                
+                <div class="media-options-box" id="mediaBox">
+                    <div class="media-buttons-row">
+                        <button type="button" class="media-opt-btn" onclick="triggerFileInput('gallery')">🖼️ Фото (Галерея)</button>
+                        <button type="button" class="media-opt-btn" onclick="triggerFileInput('camera')">📷 Камера</button>
+                        <button type="button" class="media-opt-btn" onclick="toggleStickers()">✨ Стикеры</button>
+                    </div>
+                    
+                    <input type="file" id="file_gallery" class="hidden-input" accept="image/*" onchange="handleMediaSelect(this)">
+                    <input type="file" id="file_camera" class="hidden-input" accept="image/*" capture="environment" onchange="handleMediaSelect(this)">
+                    
+                    <div class="sticker-panel" id="stickerPanel" style="display:none;">
+                        {% for st in stickers %}
+                        <div class="sticker-item" onclick="sendStickerDirectly('{{ st.emoji }}')">{{ st.emoji }}</div>
+                        {% endfor %}
+                    </div>
+                </div>
+            </div>
+
+            <button type="submit" class="btn-submit">Отправить сообщение (+15XP, +5💰)</button>
+        </form>
+
+        <div class="posts-list" id="postsList">
+            {% for post in posts %}
+            <div class="post-card {% if post.is_private %}private-messages{% endif %}" data-post-id="{{ post.id }}" id="post-{{ post.id }}" data-author="{{ post.author }}">
+                <div class="post-header-layout">
+                    <div class="avatar-container">
+                        <img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed={{ post.author | urlencode }}&backgroundColor=b6e3f4">
+                    </div>
+                    <div class="post-meta-info">
+                        <div>
+                            <span class="author-badge">{{ post.author }}</span>
+                            <span class="level-badge">Lvl 1</span>
+                        </div>
+                        <span class="room-badge">
+                            {% if post.is_private %}🔒 ЛС для: {{ post.recipient }}{% else %}{{ current_room_name }}{% endif %}
+                        </span>
+                    </div>
+                    <div class="post-id-date">
+                        <div>№{{ post.id }}</div>
+                        <div>{{ post.date }}</div>
+                    </div>
+                </div>
+                
+                <div class="post-text">{{ post.text }}</div>
+                
+                {% if post.image_url %}
+                    <div class="post-image-wrapper">
+                        <a href="{{ post.image_url }}" target="_blank"><img class="post-img" src="{{ post.image_url }}"></a>
+                    </div>
+                {% endif %}
+                
+                <div class="post-footer-layout">
+                    <div class="reactions-bar">
+                        {% for emoji, count in post.reactions.items() %}
+                        <button type="button" class="btn-react" onclick="addReaction('{{ post.id }}', '{{ emoji }}')">
+                            <span>{{ emoji }}</span> <span id="react-count-{{ post.id }}-{{ emoji }}">{{ count }}</span>
+                        </button>
+                        {% endfor %}
+                    </div>
+                    <div>
+                        <button type="button" class="btn-pm" onclick="enablePM('{{ post.author }}')">🔒 Ответить в ЛС</button>
+                        <button type="button" class="btn-reply" onclick="replyTo('{{ post.id }}')">↩ Ответить</button>
+                        <button type="button" class="btn-admin-del" id="del-btn-{{ post.id }}" style="display:none;" onclick="deletePost('{{ post.id }}')">🗑️ Удалить</button>
+                    </div>
+                </div>
+            </div>
+            {% endfor %}
+        </div>
+    </div>
+
+    <script>
+        const currentRoom = "{{ current_room }}";
+        let lastKnownPostId = {% if posts %}{{ posts[0].id }}{% else %}0{% endif %};
+        let globalSelectedImageBase64 = null;
+        
+        let myProfile = JSON.parse(localStorage.getItem('koto_profile') || '{"xp":0,"coins":20,"lvl":1,"items":[]}');
+
+        window.onload = function() {
+            if (!localStorage.getItem('koto_profile')) { saveProfile(); }
+            updateProfileUI();
+
+            const savedNick = localStorage.getItem('user_nick');
+            if (savedNick) { 
+                document.getElementById('nickname').value = savedNick;
+                checkAdminStatus(savedNick);
+            }
+
+            document.getElementById('nickname').oninput = function() {
+                localStorage.setItem('user_nick', this.value);
+                checkAdminStatus(this.value);
+            };
+
+            applySettings();
+            formatRepliesInDOM();
+            applyPurchasedSkins();
+            setInterval(checkUpdates, 3000);
+        }
+
+        function changeRoom(roomId) {
+            const nick = localStorage.getItem('user_nick') || '';
+            window.location.href = `/room/${roomId}?user=${encodeURIComponent(nick)}`;
+        }
+
+        function checkAdminStatus(nick) {
+            const isKing = (nick === "{{ admin_pwd }}");
+            document.querySelectorAll(".btn-admin-del").forEach(b => b.style.display = isKing ? "inline-block" : "none");
+        }
+
+        function saveProfile() { localStorage.setItem('koto_profile', JSON.stringify(myProfile)); }
+        
+        function updateProfileUI() {
+            document.getElementById('profLvl').innerText = myProfile.lvl;
+            document.getElementById('profXp').innerText = myProfile.xp;
+            document.getElementById('profCoins').innerText = myProfile.coins;
+        }
+
+        function toggleMediaMenu() {
+            const m = document.getElementById('mediaBox');
+            m.style.display = (m.style.display === 'none' || m.style.display === '') ? 'flex' : 'none';
+        }
+
+        function toggleStickers() {
+            const p = document.getElementById('stickerPanel');
+            p.style.display = p.style.display === 'grid' ? 'none' : 'grid';
+        }
+
+        function triggerFileInput(type) {
+            if(type === 'gallery') document.getElementById('file_gallery').click();
+            if(type === 'camera') document.getElementById('file_camera').click();
+        }
+
+        async function handleMediaSelect(inputEl) {
+            if(inputEl.files.length > 0) {
+                globalSelectedImageBase64 = await processImage(inputEl.files[0]);
+                document.getElementById('media-status').innerText = "(📎 Файл добавлен)";
+                document.getElementById('mediaBox').style.display = 'none';
+            }
+        }
+
+        function buyItem(itemId, cost) {
+            if (myProfile.coins < cost) { alert("Недостаточно Кото-Коинов!"); return; }
+            if (myProfile.items.includes(itemId)) { alert("Этот предмет уже куплен!"); return; }
+            myProfile.coins -= cost;
+            myProfile.items.push(itemId);
+            saveProfile(); updateProfileUI(); applyPurchasedSkins();
+            alert("Куплено!");
+        }
+
+        function applyPurchasedSkins() {
+            const myNick = localStorage.getItem('user_nick') || '';
+            if(!myNick) return;
+            document.querySelectorAll(".post-card").forEach(card => {
+                if(card.getAttribute("data-author") === myNick) {
+                    const avBox = card.querySelector(".avatar-container");
+                    if (myProfile.items.includes('glasses') && !avBox.querySelector(".decor-glasses")) {
+                        avBox.innerHTML += '<div class="decor-glasses">👓</div>';
+                    }
+                    if (myProfile.items.includes('hat') && !avBox.querySelector(".decor-hat")) {
+                        avBox.innerHTML += '<div class="decor-item decor-hat">🎩</div>';
+                    }
+                    if (myProfile.items.includes('mask') && !avBox.querySelector(".decor-mask")) {
+                        avBox.innerHTML += '<div class="decor-item decor-mask">🎭</div>';
+                    }
+                    if (myProfile.items.includes('gold')) { card.classList.add("gold-skin"); }
+                    
+                    card.querySelector(".level-badge").innerText = `Lvl ${myProfile.lvl}`;
+                }
+            });
+        }
+
+        function enablePM(targetNick) {
+            if (currentRoom === 'pm') {
+                document.getElementById("direct_recipient").value = targetNick;
+            } else {
+                document.getElementById("is_private").value = "1";
+                document.getElementById("recipient").value = targetNick;
+                document.getElementById("pmTarget").innerText = targetNick;
+                document.getElementById("pmIndicator").style.display = "flex";
+            }
+            document.getElementById("message_text").placeholder = `Личное сообщение для ${targetNick}...`;
+        }
+
+        function disablePM() {
+            document.getElementById("is_private").value = "0";
+            document.getElementById("recipient").value = "";
+            document.getElementById("pmIndicator").style.display = "none";
+            document.getElementById("message_text").placeholder = "Напиши сообщение...";
+        }
+
+        function checkLvlUp() {
+            let nextLvlXp = myProfile.lvl * 150;
+            if (myProfile.xp >= nextLvlXp) {
+                myProfile.xp -= nextLvlXp;
+                myProfile.lvl += 1;
+                alert(`🚀 Уровень повышен! Теперь ты Lvl ${myProfile.lvl}!`);
+            }
+        }
+
+        function toggleTheme() {
+            const curr = document.documentElement.getAttribute('data-theme');
+            const next = curr === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+        }
+
+        function toggleSettings() {
+            const p = document.getElementById('settingsPanel');
+            p.style.display = p.style.display === 'block' ? 'none' : 'block';
+        }
+
+        function applySettings() {
+            const size = document.getElementById('settingFontSize').value;
+            document.querySelectorAll('.post-text').forEach(el => el.style.fontSize = size);
+        }
+
+        function formatRepliesInDOM() {
+            document.querySelectorAll('.post-text').forEach(el => {
+                el.innerHTML = el.innerHTML.replace(/>&gt;\s*№\s*(\d+)/g, function(match, id) {
+                    return `<a href="#post-${id}" class="reply-link" onclick="highlightTargetPost(event, '${id}')">${match}</a>`;
+                });
+            });
+        }
+
+        function highlightTargetPost(event, id) {
+            const target = document.getElementById(`post-${id}`);
+            if (target) {
+                event.preventDefault();
+                target.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        function replyTo(postId) {
+            const textarea = document.getElementById('message_text');
+            textarea.value = `>> №${postId} ` + textarea.value;
+            textarea.focus();
+        }
+
+        async function deletePost(postId) {
+            if(!confirm("Удалить пост?")) return;
+            try {
+                const res = await fetch(`/api/delete/${postId}`, { method: 'POST' });
+                const d = await res.json();
+                if(d.success) { document.getElementById(`post-${postId}`).remove(); }
+            } catch(e){}
+        }
+
+        function processImage(file) {
+            return new Promise((resolve) => {
+                const reader = new FileReader();
+                reader.readAsDataURL(file);
+                reader.onload = function (event) {
+                    const img = new Image();
+                    img.src = event.target.result;
+                    img.onload = function () {
+                        const canvas = document.createElement('canvas');
+                        const MAX_WIDTH = 1000;
+                        let w = img.width, h = img.height;
+                        if (w > MAX_WIDTH) { h *= MAX_WIDTH / w; w = MAX_WIDTH; }
+                        canvas.width = w; canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
+                        resolve(canvas.width > 0 ? canvas.toDataURL('image/jpeg', 0.7) : null);
+                    };
+                };
+            });
+        }
+
+        async function sendStickerDirectly(emoji) {
+            const nickEl = document.getElementById('nickname');
+            const formData = new FormData();
+            formData.append('text', ` [Стикер ${emoji}] `);
+            formData.append('nickname', nickEl.value);
+
+            let isPrivate = document.getElementById("is_private").value;
+            let rcpt = document.getElementById("recipient").value;
+
+            if (currentRoom === 'pm') {
+                isPrivate = "1";
+                rcpt = document.getElementById("direct_recipient").value;
+                if(!rcpt) { alert("Укажите ник получателя для отправки стикера!"); return; }
+            }
+
+            formData.append('is_private', isPrivate);
+            formData.append('recipient', rcpt);
+
+            document.getElementById('mediaBox').style.display = 'none';
+
+            try {
+                await fetch(`/create/${currentRoom}`, { method: 'POST', body: formData });
+                myProfile.xp += 15; myProfile.coins += 5;
+                checkLvlUp(); saveProfile(); updateProfileUI();
+                checkUpdates();
+            } catch (e) { console.error(e); }
+        }
+
+        async function sendPostViaAjax(event) {
+            event.preventDefault();
+            const textEl = document.getElementById('message_text');
+            const nickEl = document.getElementById('nickname');
+            
+            if(textEl.value.trim() === "" && !globalSelectedImageBase64) return;
+
+            const formData = new FormData();
+            formData.append('text', textEl.value);
+            formData.append('nickname', nickEl.value);
+
+            let isPrivate = document.getElementById("is_private").value;
+            let rcpt = document.getElementById("recipient").value;
+
+            if (currentRoom === 'pm') {
+                isPrivate = "1";
+                rcpt = document.getElementById("direct_recipient").value;
+                if(!rcpt) { alert("Укажите ник получателя личного сообщения!"); return; }
+            }
+
+            formData.append('is_private', isPrivate);
+            formData.append('recipient', rcpt);
+
+            if (globalSelectedImageBase64) {
+                formData.append('image_base64', globalSelectedImageBase64);
+            }
+
+            textEl.value = ''; disablePM();
+            globalSelectedImageBase64 = null;
+            document.getElementById('media-status').innerText = "";
+            if(document.getElementById("direct_recipient")) document.getElementById("direct_recipient").value = '';
+
+            try {
+                await fetch(`/create/${currentRoom}`, { method: 'POST', body: formData });
+                myProfile.xp += 15; myProfile.coins += 5;
+                checkLvlUp(); saveProfile(); updateProfileUI();
+                checkUpdates();
+            } catch (e) { console.error(e); }
+        }
+
+        async function checkUpdates() {
+            try {
+                const myNick = localStorage.getItem('user_nick') || '';
+                const response = await fetch(`/api/get_latest_ids?user=${encodeURIComponent(myNick)}`);
+                const latestIds = await response.json();
+                const latestInCurrent = latestIds[currentRoom] || 0;
+                if (latestInCurrent > lastKnownPostId) { fetchNewPostsForCurrentRoom(); }
+            } catch (e) {}
+        }
+
+        async function fetchNewPostsForCurrentRoom() {
+            try {
+                const myNick = localStorage.getItem('user_nick') || '';
+                const response = await fetch(`/api/get_posts/${currentRoom}?user=${encodeURIComponent(myNick)}`);
+                const posts = await response.json();
+                const postsList = document.getElementById('postsList');
+                const newPosts = posts.filter(p => p.id > lastKnownPostId);
+                
+                if (newPosts.length > 0) {
+                    newPosts.forEach(post => {
+                        if (document.getElementById(`post-${post.id}`)) return;
+                        
+                        const card = document.createElement('div');
+                        card.className = `post-card ${post.is_private ? 'private-messages' : ''}`;
+                        card.id = `post-${post.id}`;
+                        card.setAttribute('data-post-id', post.id);
+                        card.setAttribute('data-author', post.author);
+                        
+                        let imgHtml = post.image_url ? `<div class="post-image-wrapper"><a href="${post.image_url}" target="_blank"><img class="post-img" src="${post.image_url}"></a></div>` : '';
+                        let reactHtml = '';
+                        for (const em in post.reactions) {
+                            reactHtml += `<button type="button" class="btn-react" onclick="addReaction('${post.id}', '${em}')"><span>${em}</span> <span id="react-count-${post.id}-${em}">${post.reactions[em]}</span></button>`;
+                        }
+
+                        card.innerHTML = `
+                            <div class="post-header-layout">
+                                <div class="avatar-container"><img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(post.author)}&backgroundColor=b6e3f4"></div>
+                                <div class="post-meta-info">
+                                    <div><span class="author-badge">${post.author}</span><span class="level-badge">Lvl 1</span></div>
+                                    <span class="room-badge">${post.is_private ? '🔒 ЛС для: ' + post.recipient : 'Текущая комната'}</span>
+                                </div>
+                                <div class="post-id-date"><div>№${post.id}</div><div>${post.date}</div></div>
+                            </div>
+                            <div class="post-text">${post.text}</div>
+                            ${imgHtml}
+                            <div class="post-footer-layout">
+                                <div class="reactions-bar">${reactHtml}</div>
+                                <div>
+                                    <button type="button" class="btn-pm" onclick="enablePM('${post.author}')">🔒 Ответить в ЛС</button>
+                                    <button type="button" class="btn-reply" onclick="replyTo('${post.id}')">↩ Ответить</button>
+                                    <button type="button" class="btn-admin-del" id="del-btn-${post.id}" style="display:none;" onclick="deletePost('${post.id}')">🗑️ Удалить</button>
+                                </div>
+                            </div>
+                        `;
+                        postsList.insertBefore(card, postsList.firstChild);
+                    });
+
+                    lastKnownPostId = posts[0].id;
+                    formatRepliesInDOM(); applyPurchasedSkins(); checkAdminStatus(myNick);
+                }
+            } catch (e) {}
+        }
+
+        async function addReaction(postId, emoji) {
+            try {
+                const r = await fetch(`/api/react/${postId}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ emoji: emoji })
+                });
+                const d = await r.json();
+                if(d.success) { document.getElementById(`react-count-${postId}-${emoji}`).innerText = d.new_count; }
+            } catch(e){}
+        }
+    </script>
+</body>
+</html>
