@@ -14,9 +14,9 @@ except ImportError:
     PSYCOPG2_AVAILABLE = False
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 15 * 1024 * 1024  # Увеличили лимит под обновы
+app.config['MAX_CONTENT_LENGTH'] = 15 * 1024 * 1024
 
-# Секретный пароль администратора для удаления постов и кастомных команд
+# Секретный пароль администратора для удаления постов
 ADMIN_PASSWORD = "KING_MAX"
 
 MEMORY_POSTS = {}
@@ -26,24 +26,16 @@ ROOMS = {
     "code": "💻 Программирование",
     "cats": "🐱 Ламповые коты",
     "memes": "🔥 Мемы и пикчи",
-    "secret": "🔒 Секретная зона"
+    "pm": "✉️ Личные сообщения"
 }
 
 PINNED_MESSAGES = {
-    "b": "Идиакант 2.0 запущен! Копи XP, зарабатывай Кото-Коины и побеждай Багнутого Скрипта! 💬",
-    "games": "Здесь обсуждаем моды, сервера, Brawl Stars, Prism Launcher и создание игр! 🎮",
-    "code": "Пишем код на Python, HTML/JS, делаем PyOS и фиксим баги вместе! 💻",
-    "cats": "Комната для любителей пушистых! Покупай аксессуары в магазине и украшай кота 🐱",
+    "b": "Мир Идиаканта 2.0! Общайся, копи XP, зарабатывай Кото-Коины и покупай скины! 💬",
+    "games": "Обсуждаем моды, сервера, Brawl Stars, Prism Launcher и создание игр! 🎮",
+    "code": "Пишем код на Python, HTML/JS, создаём PyOS и фиксим баги вместе! 💻",
+    "cats": "Комната для любителей пушистых! Украшай своего кота в магазине 🐱",
     "memes": "Сюда кидаем самые свежие и угарные пикчи 🔥",
-    "secret": "Секретный бункер. Вход только для своих 🔒"
-}
-
-# Глобальное состояние Рейд-Босса (хранится в памяти сервера)
-BOSS = {
-    "name": "👾 Багнутый Скрипт",
-    "hp": 2500,
-    "max_hp": 2500,
-    "status": "Активен"
+    "pm": "🔒 Твой приватный ящик. Здесь отображаются только диалоги с твоим участием."
 }
 
 def get_db_connection():
@@ -59,7 +51,6 @@ def init_db():
             conn = get_db_connection()
             if conn:
                 cursor = conn.cursor()
-                # Новая структура таблицы с поддержкой ЛС (is_private, recipient)
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS posts (
                         id SERIAL PRIMARY KEY,
@@ -76,7 +67,7 @@ def init_db():
                 conn.commit()
                 cursor.close()
                 conn.close()
-                print("--- БАЗА ДАННЫХ СУПЕР-ЧАТА ИНИЦИАЛИЗИРОВАНА ---")
+                print("--- БАЗА ДАННЫХ ИДИАКАНТА ОБНОВЛЕНА ---")
         except Exception as e:
             print(f"Ошибка инициализации базы: {e}")
             if conn: conn.close()
@@ -105,6 +96,35 @@ def load_posts(room_id):
             if conn: conn.close()
                 
     return MEMORY_POSTS.get(room_id, [])
+
+def load_all_private_posts():
+    """Загружает все ЛС для фильтрации на стороне сервера/клиента"""
+    if PSYCOPG2_AVAILABLE:
+        conn = None
+        try:
+            conn = get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM posts WHERE is_private = TRUE ORDER BY id DESC")
+                posts = cursor.fetchall()
+                cursor.close()
+                conn.close()
+                for p in posts:
+                    if isinstance(p['reactions'], str):
+                        try: p['reactions'] = json.loads(p['reactions'])
+                        except: p['reactions'] = {"❤️": 0, "🔥": 0, "😂": 0, "💀": 0}
+                return posts
+        except Exception as e:
+            if conn: conn.close()
+    
+    # Для памяти: собираем из всех комнат то, что помечено как ЛС
+    all_pms = []
+    for r in MEMORY_POSTS:
+        for p in MEMORY_POSTS[r]:
+            if p.get("is_private"):
+                all_pms.append(p)
+    all_pms.sort(key=lambda x: x["id"], reverse=True)
+    return all_pms
 
 def save_post(room_id, author, text, image_data, date_str, is_private=False, recipient=""):
     default_reactions = json.dumps({"❤️": 0, "🔥": 0, "😂": 0, "💀": 0})
@@ -174,21 +194,9 @@ HTML_TEMPLATE = """
         }
         .container { max-width: 600px; margin: 0 auto; padding: 12px; }
         
-        /* Панель Рейд-Босса */
-        .boss-container {
-            background: linear-gradient(135deg, #2a0808, #150505); border: 1px solid #ff5252;
-            padding: 10px; border-radius: 10px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;
-        }
-        .boss-meta { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; color: #ff8a80; }
-        .boss-hp-bar { background: #331111; height: 12px; border-radius: 6px; overflow: hidden; width: 100%; border: 1px solid #551111; }
-        .boss-hp-fill { background: linear-gradient(90deg, #ff1744, #ff5252); height: 100%; transition: width 0.3s; }
-        .btn-boss-attack {
-            background: #ff1744; color: white; border: none; padding: 6px; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; text-transform: uppercase;
-        }
-
         .pinned-box {
             background: var(--bg-card); border-left: 4px solid var(--accent); padding: 10px;
-            border-radius: 0 8px 8px 0; margin-bottom: 12px; font-size: 13px; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+            border-radius: 0 8px 8px 0; margin-bottom: 12px; font-size: 13px; border: 1px solid var(--border); border-left: 4px solid var(--accent);
         }
 
         .rooms-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 12px; }
@@ -197,9 +205,8 @@ HTML_TEMPLATE = """
             border-radius: 20px; font-size: 13px; white-space: nowrap; border: 1px solid var(--border);
         }
         .room-chip.active { color: #121212; background: linear-gradient(135deg, #ffb74d, #ff9800); border-color: #ff9800; font-weight: bold; }
-        .room-chip.has-new { border-color: #ff5252; color: #ff5252; font-weight: bold; }
 
-        /* Игровой профиль в настройках */
+        /* Игровой профиль */
         .profile-card {
             background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: 8px; margin-bottom: 10px;
             display: flex; align-items: center; gap: 12px;
@@ -208,7 +215,7 @@ HTML_TEMPLATE = """
         .coin-count { color: #ffd54f; font-weight: bold; }
         .xp-count { color: #64b5f6; font-weight: bold; }
 
-        /* Магазин Кот-Маркет */
+        /* Кот-Маркет */
         .market-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 8px; }
         .market-item {
             background: var(--bg-input); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center; font-size: 12px;
@@ -217,8 +224,8 @@ HTML_TEMPLATE = """
 
         .post-form { background: var(--bg-card); padding: 14px; border-radius: 12px; margin-bottom: 15px; border: 1px solid var(--border); }
         .pm-selector {
-            background: rgba(123, 31, 162, 0.1); border: 1px solid var(--border-private); padding: 6px; border-radius: 6px; margin-bottom: 8px;
-            font-size: 12px; display: flex; align-items: center; gap: 6px; display: none; color: #ba68c8;
+            background: rgba(123, 31, 162, 0.15); border: 1px solid var(--border-private); padding: 8px; border-radius: 6px; margin-bottom: 8px;
+            font-size: 13px; display: flex; align-items: center; justify-content: space-between; color: #ba68c8; font-weight: bold;
         }
 
         .nickname-input { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-input); color: #81c784; font-weight: bold; margin-bottom: 8px; }
@@ -226,7 +233,7 @@ HTML_TEMPLATE = """
         
         .btn-submit { width: 100%; padding: 12px; background: linear-gradient(135deg, #ffb74d, #ff9800); border: none; color: #121212; font-weight: bold; border-radius: 6px; cursor: pointer; }
         
-        /* Посты */
+        /* Карточки постов */
         .post-card { background: var(--bg-card); padding: 14px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 10px; position: relative; }
         .post-card.private-messages { background: var(--bg-private) !important; border-color: var(--border-private) !important; }
         .post-card.gold-skin { background: linear-gradient(135deg, #2c2205, #141002) !important; border-color: #ffd54f !important; box-shadow: 0 0 10px rgba(255,213,79,0.2); }
@@ -239,7 +246,7 @@ HTML_TEMPLATE = """
 
         .post-meta-info { flex-grow: 1; display: flex; flex-direction: column; font-size: 12px; }
         .author-badge { color: #81c784; font-weight: bold; }
-        .level-badge { background: #333; color: #64b5f6; font-size: 10px; padding: 1px 4px; border-radius: 3px; margin-left: 4px; font-weight: normal; }
+        .level-badge { background: #333; color: #64b5f6; font-size: 10px; padding: 1px 4px; border-radius: 3px; margin-left: 4px; }
         .room-badge { background: var(--bg-input); color: var(--accent-light); padding: 1px 4px; border-radius: 4px; font-size: 10px; width: fit-content; }
         .post-id-date { color: var(--text-muted); font-size: 11px; text-align: right; }
         
@@ -255,11 +262,6 @@ HTML_TEMPLATE = """
         
         .post-image-wrapper { margin-top: 8px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
         .post-img { width: 100%; max-height: 300px; object-fit: contain; display: block; }
-
-        .notification-toast {
-            position: fixed; bottom: 20px; right: 20px; background: #1a1a26; border-left: 5px solid #ff1744;
-            color: #fff; padding: 12px; border-radius: 6px; z-index: 1000; max-width: 300px; box-shadow: 0 4px 15px rgba(0,0,0,0.4);
-        }
     </style>
 </head>
 <body>
@@ -273,18 +275,14 @@ HTML_TEMPLATE = """
     </div>
     
     <div class="container">
-        <div class="boss-container">
-            <div class="boss-meta">
-                <span>⚔️ РЕЙД-БОСС: <span id="bossName">{{ boss.name }}</span></span>
-                <span id="bossHpText">{{ boss.hp }} / {{ boss.max_hp }} HP</span>
-            </div>
-            <div class="boss-hp-bar">
-                <div id="bossHpFill" class="boss-hp-fill" style="width: {{ (boss.hp / boss.max_hp)*100 }}%;"></div>
-            </div>
-            <button type="button" class="btn-boss-attack" onclick="attackBoss()">🔥 Нанести удар Скрипту!</button>
+        
+        {% if pinned_msg %}
+        <div class="pinned-box">
+            📌 <b>Закреплено:</b> {{ pinned_msg }}
         </div>
+        {% endif %}
 
-        <div id="settingsPanel" class="settings-panel" style="background: var(--bg-card); border: 1px solid var(--border); padding: 12px; border-radius: 10px; margin-bottom: 12px; display: none;">
+        <div id="settingsPanel" style="background: var(--bg-card); border: 1px solid var(--border); padding: 12px; border-radius: 10px; margin-bottom: 12px; display: none;">
             <h3 style="margin: 0 0 8px 0; font-size: 14px; color: var(--accent-light);">🎒 Твой Кото-Профиль:</h3>
             <div class="profile-card">
                 <div class="stats-block">
@@ -294,7 +292,7 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <h3 style="margin: 8px 0 4px 0; font-size: 14px; color: #4caf50;">🛒 Кот-Маркет (Play Market):</h3>
+            <h3 style="margin: 8px 0 4px 0; font-size: 14px; color: #4caf50;">🛒 Кот-Маркет:</h3>
             <div class="market-grid">
                 <div class="market-item">
                     <span>👓 Крутые Очки</span><br><strong class="coin-count">50 💰</strong><br>
@@ -331,17 +329,24 @@ HTML_TEMPLATE = """
         </div>
         
         <form class="post-form" id="chatForm" onsubmit="sendPostViaAjax(event)">
-            <div id="pmIndicator" class="pm-selector">
-                <span>🔒 Режим приватного сообщения для: <b id="pmTarget">Ник</b></span>
+            <div id="pmIndicator" class="pm-selector" style="display: none;">
+                <span>🔒 Личное сообщение для: <span id="pmTarget" style="color:#e040fb;">Ник</span></span>
                 <button type="button" style="background:none; border:none; color:#ff5252; cursor:pointer; font-weight:bold;" onclick="disablePM()">❌ Отмена</button>
             </div>
 
-            <input type="hidden" id="is_private" name="is_private" value="0">
+            <input type="hidden" id="is_private" name="is_private" value="{% if current_room == 'pm' %}1{% else %}0{% endif %}">
             <input type="hidden" id="recipient" name="recipient" value="">
 
             <div style="margin-bottom: 8px;">
                 <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="🕶️ Твой никнейм (или Аноним)" maxlength="20">
             </div>
+
+            {% if current_room == 'pm' %}
+            <div style="margin-bottom: 8px;" id="recipientFieldBox">
+                <input type="text" id="direct_recipient" name="direct_recipient" class="nickname-input" style="color:#e040fb; border-color:var(--border-private);" placeholder="👤 Кому отправить ЛС? (Введите точный ник)" maxlength="20">
+            </div>
+            {% endif %}
+
             <div style="margin-bottom: 8px;">
                 <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение..." required></textarea>
             </div>
@@ -360,14 +365,14 @@ HTML_TEMPLATE = """
                 <div class="post-header-layout">
                     <div class="avatar-container">
                         <img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed={{ post.author | urlencode }}&backgroundColor=b6e3f4">
-                        </div>
+                    </div>
                     <div class="post-meta-info">
                         <div>
                             <span class="author-badge">{{ post.author }}</span>
                             <span class="level-badge">Lvl 1</span>
                         </div>
                         <span class="room-badge">
-                            {% if post.is_private %}🔒 Личное сообщение{% else %}{{ current_room_name }}{% endif %}
+                            {% if post.is_private %}🔒 ЛС для: {{ post.recipient }}{% else %}{{ current_room_name }}{% endif %}
                         </span>
                     </div>
                     <div class="post-id-date">
@@ -393,7 +398,7 @@ HTML_TEMPLATE = """
                         {% endfor %}
                     </div>
                     <div>
-                        <button type="button" class="btn-pm" onclick="enablePM('{{ post.author }}')">🔒 ЛС</button>
+                        <button type="button" class="btn-pm" onclick="enablePM('{{ post.author }}')">🔒 Ответить в ЛС</button>
                         <button type="button" class="btn-reply" onclick="replyTo('{{ post.id }}')">↩ Ответить</button>
                         <button type="button" class="btn-admin-del" id="del-btn-{{ post.id }}" style="display:none;" onclick="deletePost('{{ post.id }}')">🗑️ Удалить</button>
                     </div>
@@ -403,14 +408,10 @@ HTML_TEMPLATE = """
         </div>
     </div>
 
-    <audio id="mentionSound" src="https://assets.mixkit.co/active_storage/sfx/911/911-84.wav" preload="auto"></audio>
-    <div id="toastContainer"></div>
-
     <script>
         const currentRoom = "{{ current_room }}";
         let lastKnownPostId = {% if posts %}{{ posts[0].id }}{% else %}0{% endif %};
         
-        // Локальное сохранение данных Кото-Профиля (RPG)
         let myProfile = JSON.parse(localStorage.getItem('koto_profile') || '{"xp":0,"coins":20,"lvl":1,"items":[]}');
 
         window.onload = function() {
@@ -432,7 +433,6 @@ HTML_TEMPLATE = """
             formatRepliesInDOM();
             applyPurchasedSkins();
             setInterval(checkUpdates, 3000);
-            setInterval(syncBossHp, 5000);
         }
 
         function checkAdminStatus(nick) {
@@ -449,12 +449,12 @@ HTML_TEMPLATE = """
         }
 
         function buyItem(itemId, cost) {
-            if (myProfile.coins < cost) { alert("Недостаточно Кото-Коинов! Убивай босса или пиши сообщения."); return; }
+            if (myProfile.coins < cost) { alert("Недостаточно Кото-Коинов!"); return; }
             if (myProfile.items.includes(itemId)) { alert("Этот предмет уже куплен!"); return; }
             myProfile.coins -= cost;
             myProfile.items.push(itemId);
             saveProfile(); updateProfileUI(); applyPurchasedSkins();
-            alert("Успешно куплено! Предмет применился к твоему профилю.");
+            alert("Куплено!");
         }
 
         function applyPurchasedSkins() {
@@ -480,11 +480,15 @@ HTML_TEMPLATE = """
         }
 
         function enablePM(targetNick) {
-            document.getElementById("is_private").value = "1";
-            document.getElementById("recipient").value = targetNick;
-            document.getElementById("pmTarget").innerText = targetNick;
-            document.getElementById("pmIndicator").style.display = "flex";
-            document.getElementById("message_text").placeholder = `Напиши секретное ЛС для ${targetNick}...`;
+            if (currentRoom === 'pm') {
+                document.getElementById("direct_recipient").value = targetNick;
+            } else {
+                document.getElementById("is_private").value = "1";
+                document.getElementById("recipient").value = targetNick;
+                document.getElementById("pmTarget").innerText = targetNick;
+                document.getElementById("pmIndicator").style.display = "flex";
+            }
+            document.getElementById("message_text").placeholder = `Личное сообщение для ${targetNick}...`;
         }
 
         function disablePM() {
@@ -494,53 +498,19 @@ HTML_TEMPLATE = """
             document.getElementById("message_text").placeholder = "Напиши сообщение...";
         }
 
-        async function attackBoss() {
-            const dmg = 10 + (myProfile.lvl * 5);
-            try {
-                const res = await fetch('/api/boss/attack', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ damage: dmg })
-                });
-                const data = await res.json();
-                document.getElementById("bossHpText").innerText = `${data.hp} / ${data.max_hp} HP`;
-                document.getElementById("bossHpFill").style.width = `${(data.hp / data.max_hp) * 100}%`;
-                
-                // Награда
-                const reward = randomInt(5, 15);
-                myProfile.coins += reward;
-                myProfile.xp += 10;
-                checkLvlUp(); saveProfile(); updateProfileUI();
-                
-                if (data.hp <= 0) { alert("🎉 ВЫ УНИЧТОЖИЛИ БАГНУТЫЙ СКРИПТ! Босс перезагружается."); }
-            } catch(e){}
-        }
-
-        async function syncBossHp() {
-            try {
-                const res = await fetch('/api/boss/status');
-                const data = await res.json();
-                document.getElementById("bossHpText").innerText = `${data.hp} / ${data.max_hp} HP`;
-                document.getElementById("bossHpFill").style.width = `${(data.hp / data.max_hp) * 100}%`;
-            } catch(e){}
-        }
-
         function checkLvlUp() {
             let nextLvlXp = myProfile.lvl * 150;
             if (myProfile.xp >= nextLvlXp) {
                 myProfile.xp -= nextLvlXp;
                 myProfile.lvl += 1;
-                alert(`🚀 ГЛОБАЛЬНЫЙ УРОВЕНЬ ПОВЫШЕН! Теперь ты ${myProfile.lvl} уровня!`);
+                alert(`🚀 Уровень повышен! Теперь ты Lvl ${myProfile.lvl}!`);
             }
         }
-
-        function randomInt(min, max) { return Math.floor(Math.random() * (max - min + 1) + min); }
 
         function toggleTheme() {
             const curr = document.documentElement.getAttribute('data-theme');
             const next = curr === 'dark' ? 'light' : 'dark';
             document.documentElement.setAttribute('data-theme', next);
-            localStorage.setItem('cfg_theme', next);
         }
 
         function toggleSettings() {
@@ -550,7 +520,6 @@ HTML_TEMPLATE = """
 
         function applySettings() {
             const size = document.getElementById('settingFontSize').value;
-            localStorage.setItem('cfg_font_size', size);
             document.querySelectorAll('.post-text').forEach(el => el.style.fontSize = size);
         }
 
@@ -583,7 +552,7 @@ HTML_TEMPLATE = """
         }
 
         async function deletePost(postId) {
-            if(!confirm("Удалить это сообщение из Supabase безвозвратно?")) return;
+            if(!confirm("Удалить пост?")) return;
             try {
                 const res = await fetch(`/api/delete/${postId}`, { method: 'POST' });
                 const d = await res.json();
@@ -622,8 +591,19 @@ HTML_TEMPLATE = """
             const formData = new FormData();
             formData.append('text', textEl.value);
             formData.append('nickname', nickEl.value);
-            formData.append('is_private', document.getElementById("is_private").value);
-            formData.append('recipient', document.getElementById("recipient").value);
+
+            let isPrivate = document.getElementById("is_private").value;
+            let rcpt = document.getElementById("recipient").value;
+
+            // Если сидим в комнате PM, берем получателя из текстового поля
+            if (currentRoom === 'pm') {
+                isPrivate = "1";
+                rcpt = document.getElementById("direct_recipient").value.strip || document.getElementById("direct_recipient").value;
+                if(!rcpt) { alert("Укажите ник получателя личного сообщения!"); return; }
+            }
+
+            formData.append('is_private', isPrivate);
+            formData.append('recipient', rcpt);
 
             if (fileEl.files.length > 0) {
                 const comp = await processImage(fileEl.files[0]);
@@ -631,12 +611,11 @@ HTML_TEMPLATE = """
             }
 
             textEl.value = ''; fileEl.value = ''; disablePM(); updateFileLabel();
+            if(document.getElementById("direct_recipient")) document.getElementById("direct_recipient").value = '';
 
             try {
                 await fetch(`/create/${currentRoom}`, { method: 'POST', body: formData });
-                // Буст опыта за сообщение
-                myProfile.xp += 15;
-                myProfile.coins += 5;
+                myProfile.xp += 15; myProfile.coins += 5;
                 checkLvlUp(); saveProfile(); updateProfileUI();
                 checkUpdates();
             } catch (e) { console.error(e); }
@@ -647,14 +626,13 @@ HTML_TEMPLATE = """
                 const response = await fetch('/api/get_latest_ids');
                 const latestIds = await response.json();
                 const latestInCurrent = latestIds[currentRoom] || 0;
-                
                 if (latestInCurrent > lastKnownPostId) { fetchNewPostsForCurrentRoom(); }
             } catch (e) {}
         }
 
         async function fetchNewPostsForCurrentRoom() {
             try {
-                const response = await fetch(`/api/get_posts/${currentRoom}`);
+                const response = await fetch(`/api/get_posts/${currentRoom}?user=${encodeURIComponent(localStorage.getItem('user_nick') || '')}`);
                 const posts = await response.json();
                 const postsList = document.getElementById('postsList');
                 const newPosts = posts.filter(p => p.id > lastKnownPostId);
@@ -662,16 +640,6 @@ HTML_TEMPLATE = """
                 
                 if (newPosts.length > 0) {
                     newPosts.forEach(post => {
-                        // Фронтенд-фильтрация личных сообщений
-                        if (post.is_private && post.author !== myNick && post.recipient !== myNick) {
-                            return; // Скрываем чужие ЛС
-                        }
-
-                        if (myNick && post.text.includes(`@${myNick}`)) {
-                            document.getElementById('mentionSound').play().catch(()=>{});
-                            alert(`🔔 Вас упомянул ${post.author}!`);
-                        }
-
                         const card = document.createElement('div');
                         card.className = `post-card ${post.is_private ? 'private-messages' : ''}`;
                         card.id = `post-${post.id}`;
@@ -689,7 +657,7 @@ HTML_TEMPLATE = """
                                 <div class="avatar-container"><img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(post.author)}&backgroundColor=b6e3f4"></div>
                                 <div class="post-meta-info">
                                     <div><span class="author-badge">${post.author}</span><span class="level-badge">Lvl 1</span></div>
-                                    <span class="room-badge">${post.is_private ? '🔒 Личное сообщение' : 'Текущая комната'}</span>
+                                    <span class="room-badge">${post.is_private ? '🔒 ЛС для: ' + post.recipient : 'Текущая комната'}</span>
                                 </div>
                                 <div class="post-id-date"><div>№${post.id}</div><div>${post.date}</div></div>
                             </div>
@@ -698,7 +666,7 @@ HTML_TEMPLATE = """
                             <div class="post-footer-layout">
                                 <div class="reactions-bar">${reactHtml}</div>
                                 <div>
-                                    <button type="button" class="btn-pm" onclick="enablePM('${post.author}')">🔒 ЛС</button>
+                                    <button type="button" class="btn-pm" onclick="enablePM('${post.author}')">🔒 Ответить в ЛС</button>
                                     <button type="button" class="btn-reply" onclick="replyTo('${post.id}')">↩ Ответить</button>
                                     <button type="button" class="btn-admin-del" id="del-btn-${post.id}" style="display:none;" onclick="deletePost('${post.id}')">🗑️ Удалить</button>
                                 </div>
@@ -708,9 +676,7 @@ HTML_TEMPLATE = """
                     });
 
                     lastKnownPostId = posts[0].id;
-                    formatRepliesInDOM();
-                    applyPurchasedSkins();
-                    checkAdminStatus(myNick);
+                    formatRepliesInDOM(); applyPurchasedSkins(); checkAdminStatus(myNick);
                 }
             } catch (e) {}
         }
@@ -731,29 +697,28 @@ HTML_TEMPLATE = """
 </html>
 """
 
-@app.route("/api/boss/status")
-def boss_status():
-    return jsonify(BOSS)
-
-@app.route("/api/boss/attack", methods=["POST"])
-def boss_attack():
-    dmg = request.json.get("damage", 10)
-    BOSS["hp"] -= dmg
-    if BOSS["hp"] <= 0:
-        BOSS["hp"] = BOSS["max_hp"]  # Возрождение
-    return jsonify(BOSS)
-
 @app.route("/api/get_latest_ids")
 def api_get_latest_ids():
     ids = {}
     for r_id in ROOMS:
-        posts = load_posts(r_id)
+        if r_id == "pm":
+            posts = load_all_private_posts()
+        else:
+            posts = load_posts(r_id)
         ids[r_id] = posts[0]["id"] if posts else 0
     return jsonify(ids)
 
 @app.route("/api/get_posts/<room_id>")
 def api_get_posts(room_id):
     if room_id not in ROOMS: return jsonify([])
+    user_nick = request.args.get("user", "").strip()
+    
+    if room_id == "pm":
+        all_pms = load_all_private_posts()
+        # Фильтруем приватные посты на сервере: только отправленные юзером или предназначенные ему
+        filtered = [p for p in all_pms if p["author"] == user_nick or p["recipient"] == user_nick]
+        return jsonify(filtered)
+        
     return jsonify(load_posts(room_id))
 
 @app.route("/api/delete/<int:post_id>", methods=["POST"])
@@ -770,7 +735,6 @@ def api_delete_post(post_id):
                 conn.close()
                 return jsonify({"success": True})
         except Exception as e:
-            print(f"Ошибка удаления: {e}")
             if conn: conn.close()
     else:
         for r in MEMORY_POSTS:
@@ -807,11 +771,20 @@ def index(): return redirect("/room/b")
 @app.route("/room/<room_id>")
 def view_room(room_id):
     if room_id not in ROOMS: return redirect("/")
-    posts = load_posts(room_id)
+    
+    user_nick = request.args.get("user", "").strip() # Если передано в URL
+    
+    if room_id == "pm":
+        all_pms = load_all_private_posts()
+        # В шаблоне первоначальный рендеринг тоже фильтрует (хотя основной упор идет на JS-обновление)
+        posts = all_pms # Фронтенд дополнительно отфильтрует по localStorage
+    else:
+        posts = load_posts(room_id)
+        
     return render_template_string(
         HTML_TEMPLATE, posts=posts, rooms=ROOMS, current_room=room_id, 
         room_title=ROOMS[room_id], current_room_name=ROOMS[room_id].split()[-1],
-        pinned_msg=PINNED_MESSAGES.get(room_id, ""), boss=BOSS, admin_pwd=ADMIN_PASSWORD
+        pinned_msg=PINNED_MESSAGES.get(room_id, ""), admin_pwd=ADMIN_PASSWORD
     )
 
 @app.route("/create/<room_id>", methods=["POST"])
@@ -821,7 +794,7 @@ def create_post(room_id):
     nickname = request.form.get("nickname", "").strip()
     image_data_uri = request.form.get("image_base64", "").strip() or None
     
-    is_private = request.form.get("is_private") == "1"
+    is_private = request.form.get("is_private") == "1" or room_id == "pm"
     recipient = request.form.get("recipient", "").strip()
 
     if text:
@@ -832,7 +805,10 @@ def create_post(room_id):
         else: author_name = nickname
         
         current_date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        save_post(room_id, author_name, text, image_data_uri, current_date, is_private, recipient)
+        
+        # Если пишем прямо в комнате ЛС, перезаписываем целевую комнату на специальный тег pm
+        target_room = "pm" if is_private else room_id
+        save_post(target_room, author_name, text, image_data_uri, current_date, is_private, recipient)
         
     return redirect(f"/room/{room_id}")
 
