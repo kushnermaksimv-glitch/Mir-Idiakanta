@@ -1,10 +1,8 @@
 import os
 import hashlib
-import json
 from datetime import datetime
 from flask import Flask, render_template_string, request, redirect
 
-# Пробуем импортировать psycopg2 для работы с Supabase
 try:
     import psycopg2
     from psycopg2.extras import RealDictCursor
@@ -14,15 +12,11 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Папка для локального сохранения сообщений в формате JSON
-LOCAL_STORAGE_DIR = "rooms_data"
-if not os.path.exists(LOCAL_STORAGE_DIR):
-    os.makedirs(LOCAL_STORAGE_DIR)
+# Резервное хранилище прямо в оперативной памяти сервера (если база отключится)
+MEMORY_POSTS = {
+    "b": [], "games": [], "code": [], "cats": [], "memes": [], "secret": []
+}
 
-# Имя текстового файла, куда будут сохраняться ВСЕ сообщения подряд
-LOG_FILE_PATH = "chat_log.txt"
-
-# Список наших тематических чатов
 ROOMS = {
     "b": "💬 Бред (Основной)",
     "games": "🎮 Игровой уголок",
@@ -32,94 +26,80 @@ ROOMS = {
     "secret": "🔒 Секретная зона"
 }
 
-# Функция для сохранения сообщений в обычный красивый текстовый файл (.txt)
-def log_to_text_file(room_id, author, text, date_str):
-    try:
-        room_name = ROOMS.get(room_id, room_id)
-        # Форматируем строку для файла
-        log_line = f"[{date_str}] [{room_name}] {author}: {text}\n"
-        
-        # Открываем файл в режиме "a" (append) — это значит "дописать в конец файла"
-        with open(LOG_FILE_PATH, "a", encoding="utf-8") as f:
-            f.write(log_line)
-        print(f"Сообщение успешно записано в файл {LOG_FILE_PATH}")
-    except Exception as e:
-        print(f"Ошибка при записи в текстовый файл: {e}")
-
-def is_supabase_available():
-    return PSYCOPG2_AVAILABLE and (os.environ.get("DATABASE_URL") is not None)
-
 def get_db_connection():
     db_url = os.environ.get("DATABASE_URL")
+    if not db_url:
+        return None
     return psycopg2.connect(db_url, cursor_factory=RealDictCursor)
 
 def init_db():
-    if is_supabase_available():
+    if PSYCOPG2_AVAILABLE:
+        conn = None
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("""
-                CREATE TABLE IF NOT EXISTS posts (
-                    id SERIAL PRIMARY KEY,
-                    room TEXT NOT NULL DEFAULT 'b',
-                    author TEXT NOT NULL,
-                    text TEXT NOT NULL,
-                    image_url TEXT,
-                    date TEXT NOT NULL
-                )
-            """)
-            conn.commit()
-            cursor.close()
-            conn.close()
-            print("--- БАЗА ДАННЫХ SUPABASE УСПЕШНО ИНИЦИАЛИЗИРОВАНА ---")
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("""
+                    CREATE TABLE IF NOT EXISTS posts (
+                        id SERIAL PRIMARY KEY,
+                        room TEXT NOT NULL DEFAULT 'b',
+                        author TEXT NOT NULL,
+                        text TEXT NOT NULL,
+                        image_url TEXT,
+                        date TEXT NOT NULL
+                    )
+                """)
+                conn.commit()
+                cursor.close()
+                conn.close()
+                print("--- БАЗА ДАННЫХ SUPABASE УСПЕШНО ПОДКЛЮЧЕНА И ИНИЦИАЛИЗИРОВАНА ---")
         except Exception as e:
-            print(f"Ошибка инициализации Supabase: {e}. Работаем через файлы.")
+            print(f"Предупреждение при инициализации базы: {e}. Используем оперативную память.")
+            if conn:
+                conn.close()
 
 def load_posts(room_id):
-    if is_supabase_available():
+    if PSYCOPG2_AVAILABLE:
+        conn = None
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute("SELECT * FROM posts WHERE room = %s ORDER BY id DESC", (room_id,))
-            posts = cursor.fetchall()
-            cursor.close()
-            conn.close()
-            return posts
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT * FROM posts WHERE room = %s ORDER BY id DESC", (room_id,))
+                posts = cursor.fetchall()
+                cursor.close()
+                conn.close()
+                return posts
         except Exception as e:
-            print(f"Ошибка чтения Supabase: {e}. Переключаемся на файлы.")
-    
-    # Файловый резервный метод (JSON)
-    file_path = os.path.join(LOCAL_STORAGE_DIR, f"{room_id}.json")
-    if os.path.exists(file_path):
-        try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except Exception:
-            return []
-    return []
+            print(f"Ошибка чтения базы: {e}. Переключаемся на память сервера.")
+            if conn:
+                conn.close()
+                
+    return MEMORY_POSTS.get(room_id, [])
 
 def save_post(room_id, author, text, image_url, date_str):
-    # 1. Сначала обязательно пишем в наш текстовый файл chat_log.txt!
-    log_to_text_file(room_id, author, text, date_str)
-    
-    # 2. Затем сохраняем в базу данных Supabase, если она подключена
-    if is_supabase_available():
+    # 1. Пробуем сохранить в вечную базу Supabase
+    if PSYCOPG2_AVAILABLE:
+        conn = None
         try:
             conn = get_db_connection()
-            cursor = conn.cursor()
-            cursor.execute(
-                "INSERT INTO posts (room, author, text, image_url, date) VALUES (%s, %s, %s, %s, %s)",
-                (room_id, author, text, image_url, date_str)
-            )
-            conn.commit()
-            cursor.close()
-            conn.close()
-            return
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO posts (room, author, text, image_url, date) VALUES (%s, %s, %s, %s, %s)",
+                    (room_id, author, text, image_url, date_str)
+                )
+                conn.commit()
+                cursor.close()
+                conn.close()
+                return
         except Exception as e:
-            print(f"Ошибка записи в Supabase: {e}. Пишем в JSON-файлы.")
-            
-    # 3. Если Supabase нет, сохраняем в структурированный JSON для вывода на сайт
-    posts = load_posts(room_id)
+            print(f"Ошибка записи в базу данных: {e}. Сохраняем в память.")
+            if conn:
+                conn.close()
+
+    # 2. Резервный вариант, если база упала
+    posts = MEMORY_POSTS.get(room_id, [])
     new_id = len(posts) + 1
     new_post = {
         "id": new_id,
@@ -130,15 +110,8 @@ def save_post(room_id, author, text, image_url, date_str):
         "date": date_str
     }
     posts.insert(0, new_post)
-    
-    file_path = os.path.join(LOCAL_STORAGE_DIR, f"{room_id}.json")
-    try:
-        with open(file_path, "w", encoding="utf-8") as f:
-            json.dump(posts, f, ensure_ascii=False, indent=4)
-    except Exception as e:
-        print(f"Ошибка записи JSON файла: {e}")
+    MEMORY_POSTS[room_id] = posts
 
-# HTML шаблон интерфейса
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -150,170 +123,57 @@ HTML_TEMPLATE = """
         * { box-sizing: border-box; transition: all 0.2s ease; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-            background: #121212;
-            color: #e5e5e5; 
-            padding: 0; 
-            margin: 0; 
+            background: #121212; color: #e5e5e5; padding: 0; margin: 0; 
         }
         .app-header {
-            background: #1f1f1f;
-            border-bottom: 2px solid #ff9800;
-            padding: 15px;
-            text-align: center;
-            position: sticky;
-            top: 0;
-            z-index: 100;
-            box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            background: #1f1f1f; border-bottom: 2px solid #ff9800; padding: 15px;
+            text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.6);
         }
-        .app-header h1 {
-            margin: 0;
-            font-size: 20px;
-            color: #ffb74d;
-        }
-        .container { 
-            max-width: 600px; 
-            margin: 0 auto; 
-            padding: 15px;
-        }
-        .rooms-scroll {
-            display: flex;
-            gap: 10px;
-            overflow-x: auto;
-            padding: 5px 0 12px 0;
-            margin-bottom: 15px;
-        }
+        .app-header h1 { margin: 0; font-size: 20px; color: #ffb74d; }
+        .container { max-width: 600px; margin: 0 auto; padding: 15px; }
+        .rooms-scroll { display: flex; gap: 10px; overflow-x: auto; padding: 5px 0 12px 0; margin-bottom: 15px; }
         .rooms-scroll::-webkit-scrollbar { height: 4px; }
         .rooms-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
         .room-chip {
-            background: #1e1e1e;
-            color: #a0a0a0;
-            text-decoration: none;
-            padding: 10px 16px;
-            border-radius: 25px;
-            font-size: 14px;
-            white-space: nowrap;
-            border: 1px solid #2d2d2d;
+            background: #1e1e1e; color: #a0a0a0; text-decoration: none; padding: 10px 16px;
+            border-radius: 25px; font-size: 14px; white-space: nowrap; border: 1px solid #2d2d2d;
         }
-        .room-chip.active {
-            color: #121212;
-            background: linear-gradient(135deg, #ffb74d, #ff9800);
-            border-color: #ff9800;
-            font-weight: bold;
-        }
-        .post-form { 
-            background: #1e1e1e; 
-            padding: 16px; 
-            border-radius: 14px; 
-            margin-bottom: 20px; 
-            border: 1px solid #2d2d2d;
-        }
+        .room-chip.active { color: #121212; background: linear-gradient(135deg, #ffb74d, #ff9800); border-color: #ff9800; font-weight: bold; }
+        .post-form { background: #1e1e1e; padding: 16px; border-radius: 14px; margin-bottom: 20px; border: 1px solid #2d2d2d; }
         .input-group { margin-bottom: 12px; }
         .nickname-input {
-            width: 100%;
-            padding: 12px;
-            border-radius: 8px;
-            border: 1px solid #333;
-            background: #151515;
-            color: #81c784;
-            font-weight: bold;
-            font-size: 15px;
+            width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #333;
+            background: #151515; color: #81c784; font-weight: bold; font-size: 15px;
         }
         textarea { 
-            width: 100%; 
-            padding: 12px; 
-            border-radius: 8px; 
-            border: 1px solid #333; 
-            background: #151515; 
-            color: #fff; 
-            font-size: 15px;
-            resize: none;
+            width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #333; 
+            background: #151515; color: #fff; font-size: 15px; resize: none;
         }
         .url-box { display: flex; gap: 8px; }
-        .url-box input { 
-            flex: 1; 
-            padding: 12px; 
-            border-radius: 8px; 
-            border: 1px solid #333; 
-            background: #151515; 
-            color: #fff; 
-        }
-        .btn-paste { 
-            padding: 0 15px; 
-            background: #26a69a; 
-            border: none; 
-            color: white; 
-            border-radius: 8px; 
-            cursor: pointer; 
-        }
+        .url-box input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #333; background: #151515; color: #fff; }
+        .btn-paste { padding: 0 15px; background: #26a69a; border: none; color: white; border-radius: 8px; cursor: pointer; }
         .btn-submit { 
-            width: 100%; 
-            padding: 14px; 
-            background: linear-gradient(135deg, #ffb74d, #ff9800); 
-            border: none; 
-            color: #121212; 
-            font-weight: bold; 
-            font-size: 16px;
-            border-radius: 8px; 
-            cursor: pointer; 
-            margin-top: 10px;
+            width: 100%; padding: 14px; background: linear-gradient(135deg, #ffb74d, #ff9800); 
+            border: none; color: #121212; font-weight: bold; font-size: 16px; border-radius: 8px; cursor: pointer; margin-top: 10px;
         }
-        .post-card { 
-            background: #1e1e1e; 
-            padding: 16px; 
-            border-radius: 12px; 
-            border: 1px solid #2d2d2d;
-            margin-bottom: 12px;
-        }
+        .post-card { background: #1e1e1e; padding: 16px; border-radius: 12px; border: 1px solid #2d2d2d; margin-bottom: 12px; }
         .post-meta { 
-            font-size: 12px; 
-            color: #777; 
-            margin-bottom: 8px; 
-            display: flex; 
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #2d2d2d;
-            padding-bottom: 6px;
+            font-size: 12px; color: #777; margin-bottom: 8px; display: flex; justify-content: space-between;
+            align-items: center; border-bottom: 1px solid #2d2d2d; padding-bottom: 6px;
         }
         .author-badge { color: #81c784; font-weight: bold; }
-        .room-badge {
-            background: #333;
-            color: #ffb74d;
-            padding: 2px 6px;
-            border-radius: 4px;
-            font-size: 11px;
-            margin-left: 6px;
-        }
+        .room-badge { background: #333; color: #ffb74d; padding: 2px 6px; border-radius: 4px; font-size: 11px; margin-left: 6px; }
         .post-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: #f5f5f5; }
-        .post-footer {
-            margin-top: 10px;
-            display: flex;
-            justify-content: flex-end;
-        }
-        .btn-reply {
-            background: none;
-            border: none;
-            color: #26a69a;
-            cursor: pointer;
-            font-size: 13px;
-            font-weight: bold;
-            padding: 4px 8px;
-        }
-        .btn-reply:hover { color: #80cbc4; }
-        .post-image-wrapper {
-            margin-top: 12px;
-            border-radius: 8px;
-            overflow: hidden;
-            border: 1px solid #2d2d2d;
-        }
+        .post-footer { margin-top: 10px; display: flex; justify-content: flex-end; }
+        .btn-reply { background: none; border: none; color: #26a69a; cursor: pointer; font-size: 13px; font-weight: bold; padding: 4px 8px; }
+        .post-image-wrapper { margin-top: 12px; border-radius: 8px; overflow: hidden; border: 1px solid #2d2d2d; }
         .post-img { width: 100%; max-height: 380px; object-fit: contain; display: block; }
     </style>
 </head>
 <body>
-
     <div class="app-header">
         <h1>{{ room_title }}</h1>
     </div>
-    
     <div class="container">
         <div class="rooms-scroll">
             {% for r_id, r_name in rooms.items() %}
@@ -323,7 +183,7 @@ HTML_TEMPLATE = """
             {% endfor %}
         </div>
         
-        <form class="post-form" method="POST" action="/create/{{ current_room }}">
+        <form class="post-form" method="POST" action="/create/{{ current_room }}" onsubmit="saveNick()">
             <div class="input-group">
                 <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="🕶️ Твой никнейм (или Аноним)" maxlength="20">
             </div>
@@ -334,7 +194,7 @@ HTML_TEMPLATE = """
                 <input type="url" id="image_url" name="image_url" placeholder="🔗 Ссылка на картинку">
                 <button type="button" class="btn-paste" onclick="pasteFromClipboard()">📋</button>
             </div>
-            <button type="submit" class="btn-submit" onclick="saveNick()">Отправить сообщение</button>
+            <button type="submit" class="btn-submit">Отправить сообщение</button>
         </form>
 
         <div class="posts-list">
@@ -348,7 +208,6 @@ HTML_TEMPLATE = """
                     <span>№{{ post.id }} • {{ post.date }}</span>
                 </div>
                 <div class="post-text">{{ post.text }}</div>
-                
                 {% if post.image_url %}
                     <div class="post-image-wrapper">
                         <a href="{{ post.image_url }}" target="_blank">
@@ -356,7 +215,6 @@ HTML_TEMPLATE = """
                         </a>
                     </div>
                 {% endif %}
-                
                 <div class="post-footer">
                     <button type="button" class="btn-reply" onclick="replyTo('{{ post.id }}', '{{ post.author }}')">↩ Ответить</button>
                 </div>
@@ -370,9 +228,7 @@ HTML_TEMPLATE = """
     <script>
         window.onload = function() {
             const savedNick = localStorage.getItem('user_nick');
-            if (savedNick) {
-                document.getElementById('nickname').value = savedNick;
-            }
+            if (savedNick) { document.getElementById('nickname').value = savedNick; }
         }
         function saveNick() {
             const nick = document.getElementById('nickname').value;
@@ -407,12 +263,8 @@ def view_room(room_id):
         return redirect("/")
     posts = load_posts(room_id)
     return render_template_string(
-        HTML_TEMPLATE, 
-        posts=posts, 
-        rooms=ROOMS, 
-        current_room=room_id, 
-        room_title=ROOMS[room_id],
-        current_room_name=ROOMS[room_id].split()[-1]
+        HTML_TEMPLATE, posts=posts, rooms=ROOMS, current_room=room_id, 
+        room_title=ROOMS[room_id], current_room_name=ROOMS[room_id].split()[-1]
     )
 
 @app.route("/create/<room_id>", methods=["POST"])
