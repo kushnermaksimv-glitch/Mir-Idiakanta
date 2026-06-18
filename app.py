@@ -2,7 +2,6 @@ import os
 import hashlib
 import base64
 import json
-import random
 from datetime import datetime
 from flask import Flask, render_template_string, request, redirect, jsonify
 
@@ -85,7 +84,7 @@ def init_db():
             if conn: conn.close()
 
 def load_posts(room_id, current_user=""):
-    current_user = current_user.strip()
+    current_user = current_user.strip() if current_user else ""
     if PSYCOPG2_AVAILABLE:
         conn = None
         try:
@@ -93,7 +92,11 @@ def load_posts(room_id, current_user=""):
             if conn:
                 cursor = conn.cursor()
                 if room_id == "pm":
-                    # ЗАЩИТА НА УРОВНЕ СЕРВЕРА: Получаем ЛС только где юзер — автор ИЛИ получатель
+                    # Защита: если ник пустой, не показываем ЛС вообще во избежание сбоев
+                    if not current_user:
+                        cursor.close()
+                        conn.close()
+                        return []
                     cursor.execute("""
                         SELECT * FROM posts 
                         WHERE room = 'pm' AND (author = %s OR recipient = %s) 
@@ -117,9 +120,9 @@ def load_posts(room_id, current_user=""):
             print(f"Ошибка чтения базы: {e}")
             if conn: conn.close()
                 
-    # Логика для локальной памяти (если БД недоступна)
     all_posts = MEMORY_POSTS.get(room_id, [])
     if room_id == "pm":
+        if not current_user: return []
         return [p for p in all_posts if p.get("author") == current_user or p.get("recipient") == current_user]
     return all_posts
 
@@ -199,11 +202,10 @@ HTML_TEMPLATE = """
         .rooms-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 12px; }
         .room-chip {
             background: var(--bg-card); color: var(--text-muted); text-decoration: none; padding: 8px 14px;
-            border-radius: 20px; font-size: 13px; white-space: nowrap; border: 1px solid var(--border);
+            border-radius: 20px; font-size: 13px; white-space: nowrap; border: 1px solid var(--border); cursor: pointer;
         }
         .room-chip.active { color: #121212; background: linear-gradient(135deg, #ffb74d, #ff9800); border-color: #ff9800; font-weight: bold; }
 
-        /* Профиль */
         .profile-card {
             background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: 8px; margin-bottom: 10px;
             display: flex; align-items: center; gap: 12px;
@@ -212,7 +214,6 @@ HTML_TEMPLATE = """
         .coin-count { color: #ffd54f; font-weight: bold; }
         .xp-count { color: #64b5f6; font-weight: bold; }
 
-        /* Маркет */
         .market-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 8px; }
         .market-item {
             background: var(--bg-input); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center; font-size: 12px;
@@ -230,20 +231,21 @@ HTML_TEMPLATE = """
         
         .btn-submit { width: 100%; padding: 12px; background: linear-gradient(135deg, #ffb74d, #ff9800); border: none; color: #121212; font-weight: bold; border-radius: 6px; cursor: pointer; }
         
-        /* Новое меню файлов */
+        /* Медиа-меню */
         .media-menu-container { margin: 8px 0; }
         .btn-trigger-media {
             background: var(--bg-input); border: 1px solid var(--border); color: var(--accent-light);
             padding: 8px 14px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold; display: inline-flex; align-items: center; gap: 5px;
         }
         .media-options-box {
-            background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 6px; display: none; gap: 8px; flex-wrap: wrap;
+            background: var(--bg-input); border: 1px solid var(--border); border-radius: 8px; padding: 10px; margin-top: 6px; display: none; gap: 8px; flex-wrap: wrap; flex-direction: column;
         }
+        .media-buttons-row { display: flex; gap: 8px; flex-wrap: wrap; }
         .media-opt-btn {
             background: var(--bg-card); border: 1px solid var(--border); color: var(--text-main); padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px;
         }
         .media-opt-btn:hover { border-color: var(--accent); }
-        .sticker-panel { width: 100%; display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px; }
+        .sticker-panel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px; width: 100%; }
         .sticker-item { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 6px; text-align: center; font-size: 20px; cursor: pointer; }
         .sticker-item:hover { transform: scale(1.1); border-color: var(--accent); }
 
@@ -336,16 +338,14 @@ HTML_TEMPLATE = """
             </select>
         </div>
 
-        <!-- Список комнат -->
         <div class="rooms-scroll">
             {% for r_id, r_name in rooms.items() %}
-                <button onclick="changeRoom('{{ r_id }}')" id="room-link-{{ r_id }}" class="room-chip {% if r_id == current_room %}active{% endif %}">
+                <button type="button" onclick="changeRoom('{{ r_id }}')" id="room-link-{{ r_id }}" class="room-chip {% if r_id == current_room %}active{% endif %}">
                     {{ r_name }}
                 </button>
             {% endfor %}
         </div>
         
-        <!-- Форма отправки -->
         <form class="post-form" id="chatForm" onsubmit="sendPostViaAjax(event)">
             <div id="pmIndicator" class="pm-selector" style="display: none;">
                 <span>🔒 Личное сообщение для: <span id="pmTarget" style="color:#e040fb;">Ник</span></span>
@@ -366,24 +366,24 @@ HTML_TEMPLATE = """
             {% endif %}
 
             <div style="margin-bottom: 8px;">
-                <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение..." required></textarea>
+                <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение..."></textarea>
             </div>
 
-            <!-- Кнопка Добавить файл и выпадающее меню -->
             <div class="media-menu-container">
                 <button type="button" class="btn-trigger-media" onclick="toggleMediaMenu()">📎 Добавить файл <span id="media-status" style="color:#81c784;"></span></button>
                 
                 <div class="media-options-box" id="mediaBox">
-                    <button type="button" class="media-opt-btn" onclick="triggerFileInput('gallery')">🖼️ Фото (Галерея)</button>
-                    <button type="button" class="media-opt-btn" onclick="triggerFileInput('camera')">📷 Камера</button>
-                    <button type="button" class="media-opt-btn" onclick="toggleStickers()">✨ Стикеры</button>
+                    <div class="media-buttons-row">
+                        <button type="button" class="media-opt-btn" onclick="triggerFileInput('gallery')">🖼️ Фото (Галерея)</button>
+                        <button type="button" class="media-opt-btn" onclick="triggerFileInput('camera')">📷 Камера</button>
+                        <button type="button" class="media-opt-btn" onclick="toggleStickers()">✨ Стикеры</button>
+                    </div>
                     
-                    <!-- Скрытые инпуты захвата файлов -->
                     <input type="file" id="file_gallery" class="hidden-input" accept="image/*" onchange="handleMediaSelect(this)">
                     <input type="file" id="file_camera" class="hidden-input" accept="image/*" capture="environment" onchange="handleMediaSelect(this)">
                     
                     <div class="sticker-panel" id="stickerPanel" style="display:none;">
-                        {% for st в stickers %}
+                        {% for st in stickers %}
                         <div class="sticker-item" onclick="sendStickerDirectly('{{ st.emoji }}')">{{ st.emoji }}</div>
                         {% endfor %}
                     </div>
@@ -393,7 +393,6 @@ HTML_TEMPLATE = """
             <button type="submit" class="btn-submit">Отправить сообщение (+15XP, +5💰)</button>
         </form>
 
-        <!-- Список постов -->
         <div class="posts-list" id="postsList">
             {% for post in posts %}
             <div class="post-card {% if post.is_private %}private-messages{% endif %}" data-post-id="{{ post.id }}" id="post-{{ post.id }}" data-author="{{ post.author }}">
@@ -463,8 +462,6 @@ HTML_TEMPLATE = """
             document.getElementById('nickname').oninput = function() {
                 localStorage.setItem('user_nick', this.value);
                 checkAdminStatus(this.value);
-                // Перезагрузить страницу с новым ником в параметрах, чтобы сервер отдал корректные ЛС
-                if (currentRoom === 'pm') { changeRoom('pm'); }
             };
 
             applySettings();
@@ -493,7 +490,7 @@ HTML_TEMPLATE = """
 
         function toggleMediaMenu() {
             const m = document.getElementById('mediaBox');
-            m.style.display = m.style.display === 'flex' ? 'none' : 'flex';
+            m.style.display = (m.style.display === 'none' || m.style.display === '') ? 'flex' : 'none';
         }
 
         function toggleStickers() {
