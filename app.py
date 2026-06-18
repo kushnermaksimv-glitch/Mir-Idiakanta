@@ -2,6 +2,7 @@ import os
 import hashlib
 import base64
 import json
+import random
 from datetime import datetime
 from flask import Flask, render_template_string, request, redirect, jsonify
 
@@ -13,7 +14,10 @@ except ImportError:
     PSYCOPG2_AVAILABLE = False
 
 app = Flask(__name__)
-app.config['MAX_CONTENT_LENGTH'] = 10 * 1024 * 1024
+app.config['MAX_CONTENT_LENGTH'] = 15 * 1024 * 1024  # Увеличили лимит под обновы
+
+# Секретный пароль администратора для удаления постов и кастомных команд
+ADMIN_PASSWORD = "KING_MAX"
 
 MEMORY_POSTS = {}
 ROOMS = {
@@ -25,14 +29,21 @@ ROOMS = {
     "secret": "🔒 Секретная зона"
 }
 
-# Дефолтные закреплённые сообщения для комнат
 PINNED_MESSAGES = {
-    "b": "Добро пожаловать в основной зал Мира Идиаканта! Будьте как дома 💬",
+    "b": "Идиакант 2.0 запущен! Копи XP, зарабатывай Кото-Коины и побеждай Багнутого Скрипта! 💬",
     "games": "Здесь обсуждаем моды, сервера, Brawl Stars, Prism Launcher и создание игр! 🎮",
     "code": "Пишем код на Python, HTML/JS, делаем PyOS и фиксим баги вместе! 💻",
-    "cats": "Комната для любителей пушистых! Выкладывайте котиков в очках и масках 🐱",
+    "cats": "Комната для любителей пушистых! Покупай аксессуары в магазине и украшай кота 🐱",
     "memes": "Сюда кидаем самые свежие и угарные пикчи 🔥",
     "secret": "Секретный бункер. Вход только для своих 🔒"
+}
+
+# Глобальное состояние Рейд-Босса (хранится в памяти сервера)
+BOSS = {
+    "name": "👾 Багнутый Скрипт",
+    "hp": 2500,
+    "max_hp": 2500,
+    "status": "Активен"
 }
 
 def get_db_connection():
@@ -48,7 +59,7 @@ def init_db():
             conn = get_db_connection()
             if conn:
                 cursor = conn.cursor()
-                # Создаём таблицу с поддержкой лайков (хранятся в JSON строке)
+                # Новая структура таблицы с поддержкой ЛС (is_private, recipient)
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS posts (
                         id SERIAL PRIMARY KEY,
@@ -57,13 +68,15 @@ def init_db():
                         text TEXT NOT NULL,
                         image_url TEXT,
                         date TEXT NOT NULL,
-                        reactions TEXT DEFAULT '{}'
+                        reactions TEXT DEFAULT '{}',
+                        is_private BOOLEAN DEFAULT FALSE,
+                        recipient TEXT DEFAULT ''
                     )
                 """)
                 conn.commit()
                 cursor.close()
                 conn.close()
-                print("--- БАЗА ДАННЫХ SUPABASE УСПЕШНО ИНИЦИАЛИЗИРОВАНА ---")
+                print("--- БАЗА ДАННЫХ СУПЕР-ЧАТА ИНИЦИАЛИЗИРОВАНА ---")
         except Exception as e:
             print(f"Ошибка инициализации базы: {e}")
             if conn: conn.close()
@@ -80,15 +93,12 @@ def load_posts(room_id):
                 cursor.close()
                 conn.close()
                 
-                # Обработка реакций из базы данных
                 for p in posts:
                     if not p.get('reactions'):
                         p['reactions'] = {"❤️": 0, "🔥": 0, "😂": 0, "💀": 0}
                     elif isinstance(p['reactions'], str):
-                        try:
-                            p['reactions'] = json.loads(p['reactions'])
-                        except:
-                            p['reactions'] = {"❤️": 0, "🔥": 0, "😂": 0, "💀": 0}
+                        try: p['reactions'] = json.loads(p['reactions'])
+                        except: p['reactions'] = {"❤️": 0, "🔥": 0, "😂": 0, "💀": 0}
                 return posts
         except Exception as e:
             print(f"Ошибка чтения базы: {e}")
@@ -96,7 +106,7 @@ def load_posts(room_id):
                 
     return MEMORY_POSTS.get(room_id, [])
 
-def save_post(room_id, author, text, image_data, date_str):
+def save_post(room_id, author, text, image_data, date_str, is_private=False, recipient=""):
     default_reactions = json.dumps({"❤️": 0, "🔥": 0, "😂": 0, "💀": 0})
     if PSYCOPG2_AVAILABLE:
         conn = None
@@ -105,8 +115,8 @@ def save_post(room_id, author, text, image_data, date_str):
             if conn:
                 cursor = conn.cursor()
                 cursor.execute(
-                    "INSERT INTO posts (room, author, text, image_url, date, reactions) VALUES (%s, %s, %s, %s, %s, %s)",
-                    (room_id, author, text, image_data, date_str, default_reactions)
+                    "INSERT INTO posts (room, author, text, image_url, date, reactions, is_private, recipient) VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
+                    (room_id, author, text, image_data, date_str, default_reactions, is_private, recipient)
                 )
                 conn.commit()
                 cursor.close()
@@ -121,7 +131,8 @@ def save_post(room_id, author, text, image_data, date_str):
     new_id = len(posts) + 1
     new_post = {
         "id": new_id, "room": room_id, "author": author, "text": text,
-        "image_url": image_data, "date": date_str, "reactions": {"❤️": 0, "🔥": 0, "😂": 0, "💀": 0}
+        "image_url": image_data, "date": date_str, "reactions": {"❤️": 0, "🔥": 0, "😂": 0, "💀": 0},
+        "is_private": is_private, "recipient": recipient
     }
     posts.insert(0, new_post)
     MEMORY_POSTS[room_id] = posts
@@ -132,139 +143,129 @@ HTML_TEMPLATE = """
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Мир Идиаканта — {{ room_title }}</title>
+    <title>Мир Идиаканта 2.0 — {{ room_title }}</title>
     <style>
-        /* Переменные для легкой смены тем оформления (Тёмная / Светлая) */
         [data-theme="dark"] {
-            --bg-main: #121212; --bg-card: #1e1e1e; --bg-header: #1f1f1f; --bg-input: #151515;
-            --text-main: #e5e5e5; --text-muted: #777; --border: #2d2d2d; --accent: #ff9800; --accent-light: #ffb74d;
+            --bg-main: #0f0f12; --bg-card: #16161f; --bg-header: #1a1a26; --bg-input: #111116;
+            --text-main: #f0f0f5; --text-muted: #62627a; --border: #232334; --accent: #ff9800; --accent-light: #ffb74d;
+            --bg-private: #211330; --border-private: #7b1fa2;
         }
         [data-theme="light"] {
-            --bg-main: #f5f5f7; --bg-card: #ffffff; --bg-header: #ffffff; --bg-input: #f0f0f2;
-            --text-main: #1d1d1f; --text-muted: #86868b; --border: #e2e2e7; --accent: #e07b00; --accent-light: #ff9800;
+            --bg-main: #f4f4f9; --bg-card: #ffffff; --bg-header: #ffffff; --bg-input: #edf0f5;
+            --text-main: #1c1c24; --text-muted: #84849a; --border: #dcdce6; --accent: #e07b00; --accent-light: #ff9800;
+            --bg-private: #f3e5f5; --border-private: #ba68c8;
         }
 
-        * { box-sizing: border-box; transition: background 0.3s, color 0.3s, border-color 0.3s; }
+        * { box-sizing: border-box; transition: background 0.2s, color 0.2s; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
             background: var(--bg-main); color: var(--text-main); padding: 0; margin: 0; font-size: 15px;
         }
         .app-header {
-            background: var(--bg-header); border-bottom: 2px solid var(--accent); padding: 15px;
+            background: var(--bg-header); border-bottom: 2px solid var(--accent); padding: 12px 15px;
             display: flex; justify-content: space-between; align-items: center;
-            position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+            position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.2);
         }
-        .app-header h1 { margin: 0; font-size: 18px; color: var(--accent-light); }
+        .app-header h1 { margin: 0; font-size: 17px; color: var(--accent-light); }
         .header-btns { display: flex; gap: 8px; }
         .btn-toggle {
             background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main);
-            padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px;
+            padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold;
         }
-        .container { max-width: 600px; margin: 0 auto; padding: 15px; }
+        .container { max-width: 600px; margin: 0 auto; padding: 12px; }
         
-        /* Закреплённое сообщение (Анкор) */
-        .pinned-box {
-            background: var(--bg-card); border-left: 4px solid var(--accent); padding: 10px 14px;
-            border-radius: 0 8px 8px 0; margin-bottom: 12px; font-size: 13px; border-top: 1px solid var(--border);
-            border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+        /* Панель Рейд-Босса */
+        .boss-container {
+            background: linear-gradient(135deg, #2a0808, #150505); border: 1px solid #ff5252;
+            padding: 10px; border-radius: 10px; margin-bottom: 12px; display: flex; flex-direction: column; gap: 6px;
         }
-        .pinned-title { font-weight: bold; color: var(--accent-light); margin-bottom: 3px; display: flex; justify-content: space-between; cursor: pointer; }
+        .boss-meta { display: flex; justify-content: space-between; font-size: 13px; font-weight: bold; color: #ff8a80; }
+        .boss-hp-bar { background: #331111; height: 12px; border-radius: 6px; overflow: hidden; width: 100%; border: 1px solid #551111; }
+        .boss-hp-fill { background: linear-gradient(90deg, #ff1744, #ff5252); height: 100%; transition: width 0.3s; }
+        .btn-boss-attack {
+            background: #ff1744; color: white; border: none; padding: 6px; font-weight: bold; border-radius: 6px; cursor: pointer; font-size: 12px; text-transform: uppercase;
+        }
 
-        .rooms-scroll { display: flex; gap: 10px; overflow-x: auto; padding: 5px 0 12px 0; margin-bottom: 15px; }
-        .rooms-scroll::-webkit-scrollbar { height: 4px; }
-        .rooms-scroll::-webkit-scrollbar-thumb { background: var(--border); border-radius: 10px; }
+        .pinned-box {
+            background: var(--bg-card); border-left: 4px solid var(--accent); padding: 10px;
+            border-radius: 0 8px 8px 0; margin-bottom: 12px; font-size: 13px; border-top: 1px solid var(--border); border-right: 1px solid var(--border); border-bottom: 1px solid var(--border);
+        }
+
+        .rooms-scroll { display: flex; gap: 8px; overflow-x: auto; padding-bottom: 8px; margin-bottom: 12px; }
         .room-chip {
-            background: var(--bg-card); color: var(--text-muted); text-decoration: none; padding: 10px 16px;
-            border-radius: 25px; font-size: 14px; white-space: nowrap; border: 1px solid var(--border); position: relative;
+            background: var(--bg-card); color: var(--text-muted); text-decoration: none; padding: 8px 14px;
+            border-radius: 20px; font-size: 13px; white-space: nowrap; border: 1px solid var(--border);
         }
         .room-chip.active { color: #121212; background: linear-gradient(135deg, #ffb74d, #ff9800); border-color: #ff9800; font-weight: bold; }
-        
-        @keyframes pulse-red {
-            0% { box-shadow: 0 0 5px #ff5252; border-color: #ff5252; }
-            50% { box-shadow: 0 0 15px #ff1744; border-color: #ff1744; background: rgba(255,23,68,0.1); }
-            100% { box-shadow: 0 0 5px #ff5252; border-color: #ff5252; }
-        }
-        .room-chip.has-new { animation: pulse-red 1.5s infinite; font-weight: bold; color: #ff5252; }
+        .room-chip.has-new { border-color: #ff5252; color: #ff5252; font-weight: bold; }
 
-        .settings-panel {
-            background: var(--bg-card); border: 1px solid var(--accent); padding: 15px; 
-            border-radius: 12px; margin-bottom: 15px; display: none;
+        /* Игровой профиль в настройках */
+        .profile-card {
+            background: var(--bg-input); border: 1px solid var(--border); padding: 10px; border-radius: 8px; margin-bottom: 10px;
+            display: flex; align-items: center; gap: 12px;
         }
-        .settings-panel h3 { margin-top: 0; color: var(--accent-light); font-size: 16px; }
-        .setting-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
-        .setting-row select { background: var(--bg-input); color: var(--text-main); border: 1px solid var(--border); padding: 6px; border-radius: 4px; }
+        .stats-block { font-size: 12px; display: flex; flex-direction: column; gap: 2px; }
+        .coin-count { color: #ffd54f; font-weight: bold; }
+        .xp-count { color: #64b5f6; font-weight: bold; }
 
-        .post-form { background: var(--bg-card); padding: 16px; border-radius: 14px; margin-bottom: 20px; border: 1px solid var(--border); }
-        .input-group { margin-bottom: 12px; }
-        .nickname-input {
-            width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border);
-            background: var(--bg-input); color: #81c784; font-weight: bold; font-size: 15px;
+        /* Магазин Кот-Маркет */
+        .market-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 8px; }
+        .market-item {
+            background: var(--bg-input); border: 1px solid var(--border); padding: 8px; border-radius: 6px; text-align: center; font-size: 12px;
         }
-        textarea { 
-            width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--border); 
-            background: var(--bg-input); color: var(--text-main); font-size: 15px; resize: none;
-        }
-        
-        .file-input-wrapper { position: relative; overflow: hidden; display: inline-block; width: 100%; }
-        .btn-file {
-            border: 1px dashed var(--border); color: var(--text-muted); background-color: var(--bg-input);
-            padding: 12px; border-radius: 8px; font-size: 14px; font-weight: bold; display: block; text-align: center; cursor: pointer;
-        }
-        .file-input-wrapper input[type=file] { font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer; }
-        .btn-submit { 
-            width: 100%; padding: 14px; background: linear-gradient(135deg, #ffb74d, #ff9800); 
-            border: none; color: #121212; font-weight: bold; font-size: 16px; border-radius: 8px; cursor: pointer; margin-top: 10px;
-        }
-        
-        /* Карточки постов */
-        .post-card { background: var(--bg-card); padding: 16px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 12px; position: relative; }
-        .post-card.highlight-reply { animation: flash-orange 2s ease-out; }
-        @keyframes flash-orange {
-            0% { background: rgba(255,152,0,0.3); border-color: #ff9800; }
-            100% { background: var(--bg-card); border-color: var(--border); }
+        .btn-buy { background: #4caf50; border: none; color: #fff; padding: 4px 8px; border-radius: 4px; font-size: 11px; cursor: pointer; margin-top: 4px; }
+
+        .post-form { background: var(--bg-card); padding: 14px; border-radius: 12px; margin-bottom: 15px; border: 1px solid var(--border); }
+        .pm-selector {
+            background: rgba(123, 31, 162, 0.1); border: 1px solid var(--border-private); padding: 6px; border-radius: 6px; margin-bottom: 8px;
+            font-size: 12px; display: flex; align-items: center; gap: 6px; display: none; color: #ba68c8;
         }
 
-        .post-header-layout { display: flex; gap: 10px; align-items: center; margin-bottom: 8px; border-bottom: 1px solid var(--border); padding-bottom: 8px; }
-        .avatar-img { width: 36px; height: 36px; border-radius: 50%; background: #2a2a2a; border: 1px solid var(--border); }
+        .nickname-input { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-input); color: #81c784; font-weight: bold; margin-bottom: 8px; }
+        textarea { width: 100%; padding: 10px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-input); color: var(--text-main); font-size: 14px; resize: none; }
+        
+        .btn-submit { width: 100%; padding: 12px; background: linear-gradient(135deg, #ffb74d, #ff9800); border: none; color: #121212; font-weight: bold; border-radius: 6px; cursor: pointer; }
+        
+        /* Посты */
+        .post-card { background: var(--bg-card); padding: 14px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 10px; position: relative; }
+        .post-card.private-messages { background: var(--bg-private) !important; border-color: var(--border-private) !important; }
+        .post-card.gold-skin { background: linear-gradient(135deg, #2c2205, #141002) !important; border-color: #ffd54f !important; box-shadow: 0 0 10px rgba(255,213,79,0.2); }
+        
+        .post-header-layout { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
+        .avatar-container { position: relative; width: 40px; height: 40px; }
+        .avatar-img { width: 100%; height: 100%; border-radius: 50%; background: #2a2a2a; }
+        .decor-item { position: absolute; top: -5px; right: -5px; font-size: 16px; }
+        .decor-glasses { position: absolute; top: 12px; left: 6px; font-size: 16px; width: 28px; text-align: center; }
+
         .post-meta-info { flex-grow: 1; display: flex; flex-direction: column; font-size: 12px; }
-        .author-badge { color: #81c784; font-weight: bold; font-size: 14px; }
-        .room-badge { background: var(--bg-input); color: var(--accent-light); padding: 1px 5px; border-radius: 4px; font-size: 10px; width: fit-content; margin-top: 2px; }
+        .author-badge { color: #81c784; font-weight: bold; }
+        .level-badge { background: #333; color: #64b5f6; font-size: 10px; padding: 1px 4px; border-radius: 3px; margin-left: 4px; font-weight: normal; }
+        .room-badge { background: var(--bg-input); color: var(--accent-light); padding: 1px 4px; border-radius: 4px; font-size: 10px; width: fit-content; }
         .post-id-date { color: var(--text-muted); font-size: 11px; text-align: right; }
         
-        /* Ссылки на ответы */
-        .reply-link { color: #ff9800; text-decoration: none; font-weight: bold; background: rgba(255,152,0,0.1); padding: 2px 5px; border-radius: 4px; }
-        .reply-link:hover { text-decoration: underline; background: rgba(255,152,0,0.2); }
-        .post-text { font-size: 15px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; color: var(--text-main); }
-        
-        /* Реакции и Футер */
-        .post-footer-layout { display: flex; justify-content: space-between; align-items: center; margin-top: 12px; border-top: 1px solid var(--border); padding-top: 8px; }
-        .reactions-bar { display: flex; gap: 6px; }
-        .btn-react {
-            background: var(--bg-input); border: 1px solid var(--border); border-radius: 6px;
-            padding: 4px 8px; font-size: 12px; cursor: pointer; color: var(--text-main); display: flex; align-items: center; gap: 4px;
-        }
-        .btn-react:hover { border-color: var(--accent); background: var(--bg-card); }
-        .btn-reply { background: none; border: none; color: #26a69a; cursor: pointer; font-size: 13px; font-weight: bold; padding: 4px 8px; }
-        
-        .post-image-wrapper { margin-top: 12px; border-radius: 8px; overflow: hidden; border: 1px solid var(--border); }
-        .post-img { width: 100%; max-height: 380px; object-fit: contain; display: block; }
+        .post-text { font-size: 14.5px; line-height: 1.45; white-space: pre-wrap; word-break: break-word; }
+        .reply-link { color: var(--accent); text-decoration: none; font-weight: bold; }
 
-        /* Всплывающие Push-уведомления внутри сайта */
+        .post-footer-layout { display: flex; justify-content: space-between; align-items: center; margin-top: 10px; border-top: 1px solid var(--border); padding-top: 6px; }
+        .reactions-bar { display: flex; gap: 4px; }
+        .btn-react { background: var(--bg-input); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; font-size: 11px; cursor: pointer; color: var(--text-main); }
+        .btn-reply, .btn-pm, .btn-admin-del { background: none; border: none; color: #26a69a; cursor: pointer; font-size: 12px; font-weight: bold; }
+        .btn-pm { color: #ba68c8; }
+        .btn-admin-del { color: #ff5252; margin-left: 10px; }
+        
+        .post-image-wrapper { margin-top: 8px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
+        .post-img { width: 100%; max-height: 300px; object-fit: contain; display: block; }
+
         .notification-toast {
-            position: fixed; bottom: 20px; right: 20px; background: linear-gradient(135deg, #1f1f1f, #2d2d2d);
-            border-left: 5px solid #ff1744; color: #fff; padding: 15px 20px; border-radius: 8px; z-index: 1000;
-            box-shadow: 0 10px 30px rgba(0,0,0,0.5); display: flex; flex-direction: column; gap: 4px;
-            max-width: 320px; animation: slide-in 0.3s ease-out; cursor: pointer; border-top: 1px solid #444;
+            position: fixed; bottom: 20px; right: 20px; background: #1a1a26; border-left: 5px solid #ff1744;
+            color: #fff; padding: 12px; border-radius: 6px; z-index: 1000; max-width: 300px; box-shadow: 0 4px 15px rgba(0,0,0,0.4);
         }
-        @keyframes slide-in { from { transform: translateY(100px); opacity: 0; } to { transform: translateY(0); opacity: 1; } }
-        .toast-title { font-weight: bold; color: #ff5252; font-size: 13px; }
-        .toast-body { font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     </style>
 </head>
 <body>
 
     <div class="app-header">
-        <h1>{{ room_title }}</h1>
+        <h1>Мир Идиаканта 2.0</h1>
         <div class="header-btns">
             <button class="btn-toggle" onclick="toggleTheme()">🌗 Тема</button>
             <button class="btn-toggle" onclick="toggleSettings()">⚙️ Меню</button>
@@ -272,35 +273,53 @@ HTML_TEMPLATE = """
     </div>
     
     <div class="container">
-        <!-- АНКОР: ЗАКРЕПЛЕННОЕ СООБЩЕНИЕ -->
-        <div class="pinned-box">
-            <div class="pinned-title" onclick="document.getElementById('pinnedText').style.display = document.getElementById('pinnedText').style.display === 'none' ? 'block' : 'none'">
-                <span>📌 Закреплённое сообщение</span>
-                <span style="font-size: 11px;">развернуть/свернуть</span>
+        <div class="boss-container">
+            <div class="boss-meta">
+                <span>⚔️ РЕЙД-БОСС: <span id="bossName">{{ boss.name }}</span></span>
+                <span id="bossHpText">{{ boss.hp }} / {{ boss.max_hp }} HP</span>
             </div>
-            <div id="pinnedText" style="margin-top: 5px; line-height: 1.4; color: var(--text-main);">
-                {{ pinned_msg }}
+            <div class="boss-hp-bar">
+                <div id="bossHpFill" class="boss-hp-fill" style="width: {{ (boss.hp / boss.max_hp)*100 }}%;"></div>
             </div>
+            <button type="button" class="btn-boss-attack" onclick="attackBoss()">🔥 Нанести удар Скрипту!</button>
         </div>
 
-        <div id="settingsPanel" class="settings-panel">
-            <h3>⚙️ Персонализация чата</h3>
-            <div class="setting-row">
-                <label>Размер шрифта:</label>
-                <select id="settingFontSize" onchange="applySettings()">
-                    <option value="14px">Мелкий</option>
-                    <option value="15px" selected>Обычный</option>
-                    <option value="17px">Крупный</option>
-                    <option value="19px">Гигантский</option>
-                </select>
+        <div id="settingsPanel" class="settings-panel" style="background: var(--bg-card); border: 1px solid var(--border); padding: 12px; border-radius: 10px; margin-bottom: 12px; display: none;">
+            <h3 style="margin: 0 0 8px 0; font-size: 14px; color: var(--accent-light);">🎒 Твой Кото-Профиль:</h3>
+            <div class="profile-card">
+                <div class="stats-block">
+                    <div>Уровень: <span id="profLvl" style="font-weight:bold; color:#64b5f6;">1</span></div>
+                    <div>Опыт: <span id="profXp" class="xp-count">0</span> XP</div>
+                    <div>Баланс: <span id="profCoins" class="coin-count">0</span> 💰 Кото-Коинов</div>
+                </div>
             </div>
-            <div class="setting-row">
-                <label>Звук уведомлений:</label>
-                <select id="settingSound" onchange="applySettings()">
-                    <option value="on">Включен 🔊</option>
-                    <option value="off">Выключен 🔇</option>
-                </select>
+
+            <h3 style="margin: 8px 0 4px 0; font-size: 14px; color: #4caf50;">🛒 Кот-Маркет (Play Market):</h3>
+            <div class="market-grid">
+                <div class="market-item">
+                    <span>👓 Крутые Очки</span><br><strong class="coin-count">50 💰</strong><br>
+                    <button class="btn-buy" onclick="buyItem('glasses', 50)">Купить</button>
+                </div>
+                <div class="market-item">
+                    <span>🎩 Цилиндр</span><br><strong class="coin-count">100 💰</strong><br>
+                    <button class="btn-buy" onclick="buyItem('hat', 100)">Купить</button>
+                </div>
+                <div class="market-item">
+                    <span>🎭 Маска SCP-035</span><br><strong class="coin-count">200 💰</strong><br>
+                    <button class="btn-buy" onclick="buyItem('mask', 200)">Купить</button>
+                </div>
+                <div class="market-item">
+                    <span>✨ Золотая Карточка</span><br><strong class="coin-count">400 💰</strong><br>
+                    <button class="btn-buy" onclick="buyItem('gold', 400)">Купить</button>
+                </div>
             </div>
+
+            <h3 style="margin: 12px 0 6px 0; font-size: 14px; color: var(--text-muted);">Размер шрифта:</h3>
+            <select id="settingFontSize" onchange="applySettings()" style="width:100%; background:var(--bg-input); color:var(--text-main); border:1px solid var(--border); padding:6px; border-radius:4px;">
+                <option value="14px">Мелкий</option>
+                <option value="15px" selected>Обычный</option>
+                <option value="17px">Крупный</option>
+            </select>
         </div>
 
         <div class="rooms-scroll">
@@ -312,34 +331,48 @@ HTML_TEMPLATE = """
         </div>
         
         <form class="post-form" id="chatForm" onsubmit="sendPostViaAjax(event)">
-            <div class="input-group">
+            <div id="pmIndicator" class="pm-selector">
+                <span>🔒 Режим приватного сообщения для: <b id="pmTarget">Ник</b></span>
+                <button type="button" style="background:none; border:none; color:#ff5252; cursor:pointer; font-weight:bold;" onclick="disablePM()">❌ Отмена</button>
+            </div>
+
+            <input type="hidden" id="is_private" name="is_private" value="0">
+            <input type="hidden" id="recipient" name="recipient" value="">
+
+            <div style="margin-bottom: 8px;">
                 <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="🕶️ Твой никнейм (или Аноним)" maxlength="20">
             </div>
-            <div class="input-group">
-                <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение в этот чат... Используй @никнейм для упоминания" required></textarea>
+            <div style="margin-bottom: 8px;">
+                <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение..." required></textarea>
             </div>
-            <div class="input-group">
+            <div style="margin-bottom: 8px;">
                 <div class="file-input-wrapper">
-                    <span class="btn-file" id="file-label">🖼️ Прикрепить фото (до 5 МБ)</span>
+                    <span class="btn-file" id="file-label">🖼️ Прикрепить фото</span>
                     <input type="file" id="image_file" accept="image/*" onchange="updateFileLabel()">
                 </div>
             </div>
-            <button type="submit" class="btn-submit">Отправить сообщение</button>
+            <button type="submit" class="btn-submit">Отправить сообщение (+15XP, +5💰)</button>
         </form>
 
         <div class="posts-list" id="postsList">
             {% for post in posts %}
-            <div class="post-card" data-post-id="{{ post.id }}" id="post-{{ post.id }}">
+            <div class="post-card {% if post.is_private %}private-messages{% endif %}" data-post-id="{{ post.id }}" id="post-{{ post.id }}" data-author="{{ post.author }}">
                 <div class="post-header-layout">
-                    <!-- Робот-генератор кошачьих аватарок на базе Dicebear -->
-                    <img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed={{ post.author | urlencode }}&backgroundColor=b6e3f4">
+                    <div class="avatar-container">
+                        <img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed={{ post.author | urlencode }}&backgroundColor=b6e3f4">
+                        </div>
                     <div class="post-meta-info">
-                        <span class="author-badge">{{ post.author }}</span>
-                        <span class="room-badge">{{ current_room_name }}</span>
+                        <div>
+                            <span class="author-badge">{{ post.author }}</span>
+                            <span class="level-badge">Lvl 1</span>
+                        </div>
+                        <span class="room-badge">
+                            {% if post.is_private %}🔒 Личное сообщение{% else %}{{ current_room_name }}{% endif %}
+                        </span>
                     </div>
                     <div class="post-id-date">
                         <div>№{{ post.id }}</div>
-                        <div style="margin-top:2px;">{{ post.date }}</div>
+                        <div>{{ post.date }}</div>
                     </div>
                 </div>
                 
@@ -347,14 +380,11 @@ HTML_TEMPLATE = """
                 
                 {% if post.image_url %}
                     <div class="post-image-wrapper">
-                        <a href="{{ post.image_url }}" target="_blank">
-                            <img class="post-img" src="{{ post.image_url }}">
-                        </a>
+                        <a href="{{ post.image_url }}" target="_blank"><img class="post-img" src="{{ post.image_url }}"></a>
                     </div>
                 {% endif %}
                 
                 <div class="post-footer-layout">
-                    <!-- Панель реакций/лайков -->
                     <div class="reactions-bar">
                         {% for emoji, count in post.reactions.items() %}
                         <button type="button" class="btn-react" onclick="addReaction('{{ post.id }}', '{{ emoji }}')">
@@ -362,81 +392,174 @@ HTML_TEMPLATE = """
                         </button>
                         {% endfor %}
                     </div>
-                    <button type="button" class="btn-reply" onclick="replyTo('{{ post.id }}', '{{ post.author }}')">↩ Ответить</button>
+                    <div>
+                        <button type="button" class="btn-pm" onclick="enablePM('{{ post.author }}')">🔒 ЛС</button>
+                        <button type="button" class="btn-reply" onclick="replyTo('{{ post.id }}')">↩ Ответить</button>
+                        <button type="button" class="btn-admin-del" id="del-btn-{{ post.id }}" style="display:none;" onclick="deletePost('{{ post.id }}')">🗑️ Удалить</button>
+                    </div>
                 </div>
             </div>
-            {% else %}
-            <p id="empty-state" style="text-align:center; color:var(--text-muted);">Тут пока пусто... Начни общение первым!</p>
             {% endfor %}
         </div>
     </div>
 
-    <!-- Звуки -->
-    <audio id="notifSound" src="https://assets.mixkit.co/active_storage/sfx/2357/2357-84.wav" preload="auto"></audio>
     <audio id="mentionSound" src="https://assets.mixkit.co/active_storage/sfx/911/911-84.wav" preload="auto"></audio>
-
     <div id="toastContainer"></div>
 
     <script>
         const currentRoom = "{{ current_room }}";
-        const currentRoomName = "{{ current_room_name }}";
         let lastKnownPostId = {% if posts %}{{ posts[0].id }}{% else %}0{% endif %};
         
-        let roomLastSeen = JSON.parse(localStorage.getItem('room_last_seen') || '{}');
-        roomLastSeen[currentRoom] = lastKnownPostId;
-        localStorage.setItem('room_last_seen', JSON.stringify(roomLastSeen));
+        // Локальное сохранение данных Кото-Профиля (RPG)
+        let myProfile = JSON.parse(localStorage.getItem('koto_profile') || '{"xp":0,"coins":20,"lvl":1,"items":[]}');
 
         window.onload = function() {
+            if (!localStorage.getItem('koto_profile')) { saveProfile(); }
+            updateProfileUI();
+
             const savedNick = localStorage.getItem('user_nick');
-            if (savedNick) { document.getElementById('nickname').value = savedNick; }
-            
-            const savedFontSize = localStorage.getItem('cfg_font_size') || '15px';
-            const savedSound = localStorage.getItem('cfg_sound') || 'on';
-            const savedTheme = localStorage.getItem('cfg_theme') || 'dark';
-            
-            document.getElementById('settingFontSize').value = savedFontSize;
-            document.getElementById('settingSound').value = savedSound;
-            document.documentElement.setAttribute('data-theme', savedTheme);
-            
+            if (savedNick) { 
+                document.getElementById('nickname').value = savedNick;
+                checkAdminStatus(savedNick);
+            }
+
+            document.getElementById('nickname').oninput = function() {
+                localStorage.setItem('user_nick', this.value);
+                checkAdminStatus(this.value);
+            };
+
             applySettings();
             formatRepliesInDOM();
-
+            applyPurchasedSkins();
             setInterval(checkUpdates, 3000);
+            setInterval(syncBossHp, 5000);
         }
 
-        function toggleTheme() {
-            const currentTheme = document.documentElement.getAttribute('data-theme');
-            const newTheme = currentTheme === 'dark' ? 'light' : 'dark';
-            document.documentElement.setAttribute('data-theme', newTheme);
-            localStorage.setItem('cfg_theme', newTheme);
+        function checkAdminStatus(nick) {
+            const isKing = (nick === "{{ admin_pwd }}");
+            document.querySelectorAll(".btn-admin-del").forEach(b => b.style.display = isKing ? "inline-block" : "none");
         }
 
-        function toggleSettings() {
-            const panel = document.getElementById('settingsPanel');
-            panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
+        function saveProfile() { localStorage.setItem('koto_profile', JSON.stringify(myProfile)); }
+        
+        function updateProfileUI() {
+            document.getElementById('profLvl').innerText = myProfile.lvl;
+            document.getElementById('profXp').innerText = myProfile.xp;
+            document.getElementById('profCoins').innerText = myProfile.coins;
         }
 
-        function applySettings() {
-            const fontSize = document.getElementById('settingFontSize').value;
-            localStorage.setItem('cfg_font_size', fontSize);
-            localStorage.setItem('cfg_sound', document.getElementById('settingSound').value);
-            document.querySelectorAll('.post-text').forEach(el => el.style.fontSize = fontSize);
+        function buyItem(itemId, cost) {
+            if (myProfile.coins < cost) { alert("Недостаточно Кото-Коинов! Убивай босса или пиши сообщения."); return; }
+            if (myProfile.items.includes(itemId)) { alert("Этот предмет уже куплен!"); return; }
+            myProfile.coins -= cost;
+            myProfile.items.push(itemId);
+            saveProfile(); updateProfileUI(); applyPurchasedSkins();
+            alert("Успешно куплено! Предмет применился к твоему профилю.");
         }
 
-        function updateFileLabel() {
-            const fileInput = document.getElementById('image_file');
-            const label = document.getElementById('file-label');
-            if (fileInput.files.length > 0) {
-                let name = fileInput.files[0].name;
-                label.innerText = `✅ Выбрано: ${name.length > 20 ? name.substring(0,20) + '...' : name}`;
-                label.style.borderColor = '#ff9800'; label.style.color = '#ffb74d';
-            } else {
-                label.innerText = "🖼️ Прикрепить фото (до 5 МБ)";
-                label.style.borderColor = 'var(--border)'; label.style.color = 'var(--text-muted)';
+        function applyPurchasedSkins() {
+            const myNick = localStorage.getItem('user_nick') || '';
+            if(!myNick) return;
+            document.querySelectorAll(".post-card").forEach(card => {
+                if(card.getAttribute("data-author") === myNick) {
+                    const avBox = card.querySelector(".avatar-container");
+                    if (myProfile.items.includes('glasses') && !avBox.querySelector(".decor-glasses")) {
+                        avBox.innerHTML += '<div class="decor-glasses">👓</div>';
+                    }
+                    if (myProfile.items.includes('hat') && !avBox.querySelector(".decor-hat")) {
+                        avBox.innerHTML += '<div class="decor-item decor-hat">🎩</div>';
+                    }
+                    if (myProfile.items.includes('mask') && !avBox.querySelector(".decor-mask")) {
+                        avBox.innerHTML += '<div class="decor-item decor-mask">🎭</div>';
+                    }
+                    if (myProfile.items.includes('gold')) { card.classList.add("gold-skin"); }
+                    
+                    card.querySelector(".level-badge").innerText = `Lvl ${myProfile.lvl}`;
+                }
+            });
+        }
+
+        function enablePM(targetNick) {
+            document.getElementById("is_private").value = "1";
+            document.getElementById("recipient").value = targetNick;
+            document.getElementById("pmTarget").innerText = targetNick;
+            document.getElementById("pmIndicator").style.display = "flex";
+            document.getElementById("message_text").placeholder = `Напиши секретное ЛС для ${targetNick}...`;
+        }
+
+        function disablePM() {
+            document.getElementById("is_private").value = "0";
+            document.getElementById("recipient").value = "";
+            document.getElementById("pmIndicator").style.display = "none";
+            document.getElementById("message_text").placeholder = "Напиши сообщение...";
+        }
+
+        async function attackBoss() {
+            const dmg = 10 + (myProfile.lvl * 5);
+            try {
+                const res = await fetch('/api/boss/attack', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ damage: dmg })
+                });
+                const data = await res.json();
+                document.getElementById("bossHpText").innerText = `${data.hp} / ${data.max_hp} HP`;
+                document.getElementById("bossHpFill").style.width = `${(data.hp / data.max_hp) * 100}%`;
+                
+                // Награда
+                const reward = randomInt(5, 15);
+                myProfile.coins += reward;
+                myProfile.xp += 10;
+                checkLvlUp(); saveProfile(); updateProfileUI();
+                
+                if (data.hp <= 0) { alert("🎉 ВЫ УНИЧТОЖИЛИ БАГНУТЫЙ СКРИПТ! Босс перезагружается."); }
+            } catch(e){}
+        }
+
+        async function syncBossHp() {
+            try {
+                const res = await fetch('/api/boss/status');
+                const data = await res.json();
+                document.getElementById("bossHpText").innerText = `${data.hp} / ${data.max_hp} HP`;
+                document.getElementById("bossHpFill").style.width = `${(data.hp / data.max_hp) * 100}%`;
+            } catch(e){}
+        }
+
+        function checkLvlUp() {
+            let nextLvlXp = myProfile.lvl * 150;
+            if (myProfile.xp >= nextLvlXp) {
+                myProfile.xp -= nextLvlXp;
+                myProfile.lvl += 1;
+                alert(`🚀 ГЛОБАЛЬНЫЙ УРОВЕНЬ ПОВЫШЕН! Теперь ты ${myProfile.lvl} уровня!`);
             }
         }
 
-        // Превращает текстовые упоминания ">> №12" в кликабельные ссылки со скроллом
+        function randomInt(min, max) { return Math.floor(Math.random() * (max - min + 1) + min); }
+
+        function toggleTheme() {
+            const curr = document.documentElement.getAttribute('data-theme');
+            const next = curr === 'dark' ? 'light' : 'dark';
+            document.documentElement.setAttribute('data-theme', next);
+            localStorage.setItem('cfg_theme', next);
+        }
+
+        function toggleSettings() {
+            const p = document.getElementById('settingsPanel');
+            p.style.display = p.style.display === 'block' ? 'none' : 'block';
+        }
+
+        function applySettings() {
+            const size = document.getElementById('settingFontSize').value;
+            localStorage.setItem('cfg_font_size', size);
+            document.querySelectorAll('.post-text').forEach(el => el.style.fontSize = size);
+        }
+
+        function updateFileLabel() {
+            const f = document.getElementById('image_file');
+            const l = document.getElementById('file-label');
+            if (f.files.length > 0) { l.innerText = "✅ Фото выбрано"; }
+        }
+
         function formatRepliesInDOM() {
             document.querySelectorAll('.post-text').forEach(el => {
                 el.innerHTML = el.innerHTML.replace(/>&gt;\s*№\s*(\d+)/g, function(match, id) {
@@ -450,44 +573,22 @@ HTML_TEMPLATE = """
             if (target) {
                 event.preventDefault();
                 target.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                target.classList.remove('highlight-reply');
-                void target.offsetWidth; // Триггер перезапуска анимации
-                target.classList.add('highlight-reply');
             }
         }
 
-        function replyTo(postId, author) {
+        function replyTo(postId) {
             const textarea = document.getElementById('message_text');
             textarea.value = `>> №${postId} ` + textarea.value;
             textarea.focus();
-            window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        async function addReaction(postId, emoji) {
+        async function deletePost(postId) {
+            if(!confirm("Удалить это сообщение из Supabase безвозвратно?")) return;
             try {
-                const response = await fetch(`/api/react/${postId}`, {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ emoji: emoji })
-                });
-                const resData = await response.json();
-                if (resData.success) {
-                    document.getElementById(`react-count-${postId}-${emoji}`).innerText = resData.new_count;
-                }
-            } catch(e) { console.error(e); }
-        }
-
-        function showNotification(title, text, roomId) {
-            if (localStorage.getItem('cfg_sound') !== 'off') {
-                document.getElementById('mentionSound').play().catch(()=>{});
-            }
-            const container = document.getElementById('toastContainer');
-            const toast = document.createElement('div');
-            toast.className = 'notification-toast';
-            toast.innerHTML = `<div class="toast-title">${title}</div><div class="toast-body">${text}</div>`;
-            toast.onclick = () => { window.location.href = `/room/${roomId}`; };
-            container.appendChild(toast);
-            setTimeout(() => { toast.remove(); }, 5000);
+                const res = await fetch(`/api/delete/${postId}`, { method: 'POST' });
+                const d = await res.json();
+                if(d.success) { document.getElementById(`post-${postId}`).remove(); }
+            } catch(e){}
         }
 
         function processImage(file) {
@@ -500,11 +601,10 @@ HTML_TEMPLATE = """
                     img.onload = function () {
                         const canvas = document.createElement('canvas');
                         const MAX_WIDTH = 1000;
-                        let width = img.width, height = img.height;
-                        if (width > MAX_WIDTH) { height *= MAX_WIDTH / width; width = MAX_WIDTH; }
-                        canvas.width = width; canvas.height = height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(img, 0, 0, width, height);
+                        let w = img.width, h = img.height;
+                        if (w > MAX_WIDTH) { h *= MAX_WIDTH / w; w = MAX_WIDTH; }
+                        canvas.width = w; canvas.height = h;
+                        canvas.getContext('2d').drawImage(img, 0, 0, w, h);
                         resolve(canvas.toDataURL('image/jpeg', 0.7));
                     };
                 };
@@ -518,21 +618,26 @@ HTML_TEMPLATE = """
             const nickEl = document.getElementById('nickname');
             
             if(textEl.value.trim() === "") return;
-            localStorage.setItem('user_nick', nickEl.value);
 
             const formData = new FormData();
             formData.append('text', textEl.value);
             formData.append('nickname', nickEl.value);
+            formData.append('is_private', document.getElementById("is_private").value);
+            formData.append('recipient', document.getElementById("recipient").value);
 
             if (fileEl.files.length > 0) {
-                const compressedBase64 = await processImage(fileEl.files[0]);
-                formData.append('image_base64', compressedBase64);
+                const comp = await processImage(fileEl.files[0]);
+                formData.append('image_base64', comp);
             }
 
-            textEl.value = ''; fileEl.value = ''; updateFileLabel();
+            textEl.value = ''; fileEl.value = ''; disablePM(); updateFileLabel();
 
             try {
                 await fetch(`/create/${currentRoom}`, { method: 'POST', body: formData });
+                // Буст опыта за сообщение
+                myProfile.xp += 15;
+                myProfile.coins += 5;
+                checkLvlUp(); saveProfile(); updateProfileUI();
                 checkUpdates();
             } catch (e) { console.error(e); }
         }
@@ -541,129 +646,102 @@ HTML_TEMPLATE = """
             try {
                 const response = await fetch('/api/get_latest_ids');
                 const latestIds = await response.json();
-                
                 const latestInCurrent = latestIds[currentRoom] || 0;
+                
                 if (latestInCurrent > lastKnownPostId) { fetchNewPostsForCurrentRoom(); }
-
-                const myNick = localStorage.getItem('user_nick') || '';
-
-                for (const roomId in latestIds) {
-                    if (roomId !== currentRoom) {
-                        const lastSeen = roomLastSeen[roomId] || 0;
-                        const chip = document.getElementById(`room-link-${roomId}`);
-                        if (chip) {
-                            if (latestIds[roomId] > lastSeen) { 
-                                chip.classList.add('has-new'); 
-                                // Проверяем на упоминания в других комнатах
-                                checkMentionsInBackground(roomId, lastSeen, myNick);
-                            } else { 
-                                chip.classList.remove('has-new'); 
-                            }
-                        }
-                    }
-                }
-            } catch (e) { console.error(e); }
-        }
-
-        async function checkMentionsInBackground(roomId, lastSeen, myNick) {
-            try {
-                const response = await fetch(`/api/get_posts/${roomId}`);
-                const posts = await response.json();
-                const newPosts = posts.filter(p => p.id > lastSeen);
-                
-                newPosts.forEach(post => {
-                    // Уведомление если упомянули ник или ответили на пост
-                    if (myNick && (post.text.includes(`@${myNick}`) || post.text.includes(`(${myNick})`))) {
-                        showNotification(`🔔 Упоминание в комнате ${roomId}!`, `${post.author}: ${post.text}`, roomId);
-                    }
-                });
-                
-                // Обновляем, чтоб не спамить уведомлениями повторно
-                if(newPosts.length > 0) {
-                    roomLastSeen[roomId] = newPosts[0].id;
-                    localStorage.setItem('room_last_seen', JSON.stringify(roomLastSeen));
-                }
-            } catch(e){}
+            } catch (e) {}
         }
 
         async function fetchNewPostsForCurrentRoom() {
             try {
                 const response = await fetch(`/api/get_posts/${currentRoom}`);
                 const posts = await response.json();
-                
                 const postsList = document.getElementById('postsList');
-                const emptyState = document.getElementById('empty-state');
-                if (emptyState) emptyState.remove();
-
                 const newPosts = posts.filter(p => p.id > lastKnownPostId);
                 const myNick = localStorage.getItem('user_nick') || '';
                 
                 if (newPosts.length > 0) {
-                    let hasAlerted = false;
-                    const currentFontSize = localStorage.getItem('cfg_font_size') || '15px';
-
                     newPosts.forEach(post => {
-                        // Если упомянули в текущей открытой комнате
-                        if (myNick && (post.text.includes(`@${myNick}`) || post.text.includes(`(${myNick})`))) {
-                            showNotification(`🔔 Вас упомянули!`, `${post.author}: ${post.text}`, currentRoom);
-                            hasAlerted = true;
+                        // Фронтенд-фильтрация личных сообщений
+                        if (post.is_private && post.author !== myNick && post.recipient !== myNick) {
+                            return; // Скрываем чужие ЛС
                         }
 
-                        const postCard = document.createElement('div');
-                        postCard.className = 'post-card';
-                        postCard.id = `post-${post.id}`;
-                        postCard.setAttribute('data-post-id', post.id);
+                        if (myNick && post.text.includes(`@${myNick}`)) {
+                            document.getElementById('mentionSound').play().catch(()=>{});
+                            alert(`🔔 Вас упомянул ${post.author}!`);
+                        }
+
+                        const card = document.createElement('div');
+                        card.className = `post-card ${post.is_private ? 'private-messages' : ''}`;
+                        card.id = `post-${post.id}`;
+                        card.setAttribute('data-post-id', post.id);
+                        card.setAttribute('data-author', post.author);
                         
-                        let imgHtml = '';
-                        if (post.image_url) {
-                            imgHtml = `<div class="post-image-wrapper"><a href="${post.image_url}" target="_blank"><img class="post-img" src="${post.image_url}"></a></div>`;
+                        let imgHtml = post.image_url ? `<div class="post-image-wrapper"><a href="${post.image_url}" target="_blank"><img class="post-img" src="${post.image_url}"></a></div>` : '';
+                        let reactHtml = '';
+                        for (const em in post.reactions) {
+                            reactHtml += `<button type="button" class="btn-react" onclick="addReaction('${post.id}', '${em}')"><span>${em}</span> <span id="react-count-${post.id}-${em}">${post.reactions[em]}</span></button>`;
                         }
 
-                        let reactionHtml = '';
-                        for (const emoji in post.reactions) {
-                            reactionHtml += `
-                                <button type="button" class="btn-react" onclick="addReaction('${post.id}', '${emoji}')">
-                                    <span>${emoji}</span> <span id="react-count-${post.id}-${emoji}">${post.reactions[emoji]}</span>
-                                </button>`;
-                        }
-
-                        postCard.innerHTML = `
+                        card.innerHTML = `
                             <div class="post-header-layout">
-                                <img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(post.author)}&backgroundColor=b6e3f4">
+                                <div class="avatar-container"><img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(post.author)}&backgroundColor=b6e3f4"></div>
                                 <div class="post-meta-info">
-                                    <span class="author-badge">${post.author}</span>
-                                    <span class="room-badge">${currentRoomName}</span>
+                                    <div><span class="author-badge">${post.author}</span><span class="level-badge">Lvl 1</span></div>
+                                    <span class="room-badge">${post.is_private ? '🔒 Личное сообщение' : 'Текущая комната'}</span>
                                 </div>
-                                <div class="post-id-date">
-                                    <div>№${post.id}</div>
-                                    <div style="margin-top:2px;">${post.date}</div>
-                                </div>
+                                <div class="post-id-date"><div>№${post.id}</div><div>${post.date}</div></div>
                             </div>
-                            <div class="post-text" style="font-size: ${currentFontSize}">${post.text}</div>
+                            <div class="post-text">${post.text}</div>
                             ${imgHtml}
                             <div class="post-footer-layout">
-                                <div class="reactions-bar">${reactionHtml}</div>
-                                <button type="button" class="btn-reply" onclick="replyTo('${post.id}', '${post.author}')">↩ Ответить</button>
+                                <div class="reactions-bar">${reactHtml}</div>
+                                <div>
+                                    <button type="button" class="btn-pm" onclick="enablePM('${post.author}')">🔒 ЛС</button>
+                                    <button type="button" class="btn-reply" onclick="replyTo('${post.id}')">↩ Ответить</button>
+                                    <button type="button" class="btn-admin-del" id="del-btn-${post.id}" style="display:none;" onclick="deletePost('${post.id}')">🗑️ Удалить</button>
+                                </div>
                             </div>
                         `;
-                        postsList.insertBefore(postCard, postsList.firstChild);
+                        postsList.insertBefore(card, postsList.firstChild);
                     });
 
-                    if (!hasAlerted && localStorage.getItem('cfg_sound') !== 'off') {
-                        document.getElementById('notifSound').play().catch(()=>{});
-                    }
-
-                    lastKnownPostId = newPosts[0].id;
-                    roomLastSeen[currentRoom] = lastKnownPostId;
-                    localStorage.setItem('room_last_seen', JSON.stringify(roomLastSeen));
+                    lastKnownPostId = posts[0].id;
                     formatRepliesInDOM();
+                    applyPurchasedSkins();
+                    checkAdminStatus(myNick);
                 }
-            } catch (e) { console.error(e); }
+            } catch (e) {}
+        }
+
+        async function addReaction(postId, emoji) {
+            try {
+                const r = await fetch(`/api/react/${postId}`, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ emoji: emoji })
+                });
+                const d = await r.json();
+                if(d.success) { document.getElementById(`react-count-${postId}-${emoji}`).innerText = d.new_count; }
+            } catch(e){}
         }
     </script>
 </body>
 </html>
 """
+
+@app.route("/api/boss/status")
+def boss_status():
+    return jsonify(BOSS)
+
+@app.route("/api/boss/attack", methods=["POST"])
+def boss_attack():
+    dmg = request.json.get("damage", 10)
+    BOSS["hp"] -= dmg
+    if BOSS["hp"] <= 0:
+        BOSS["hp"] = BOSS["max_hp"]  # Возрождение
+    return jsonify(BOSS)
 
 @app.route("/api/get_latest_ids")
 def api_get_latest_ids():
@@ -678,12 +756,32 @@ def api_get_posts(room_id):
     if room_id not in ROOMS: return jsonify([])
     return jsonify(load_posts(room_id))
 
+@app.route("/api/delete/<int:post_id>", methods=["POST"])
+def api_delete_post(post_id):
+    if PSYCOPG2_AVAILABLE:
+        conn = None
+        try:
+            conn = get_db_connection()
+            if conn:
+                cursor = conn.cursor()
+                cursor.execute("DELETE FROM posts WHERE id = %s", (post_id,))
+                conn.commit()
+                cursor.close()
+                conn.close()
+                return jsonify({"success": True})
+        except Exception as e:
+            print(f"Ошибка удаления: {e}")
+            if conn: conn.close()
+    else:
+        for r in MEMORY_POSTS:
+            MEMORY_POSTS[r] = [p for p in MEMORY_POSTS[r] if p["id"] != post_id]
+        return jsonify({"success": True})
+    return jsonify({"success": False})
+
 @app.route("/api/react/<int:post_id>", methods=["POST"])
 def api_react(post_id):
-    data = request.json or {}
-    emoji = data.get("emoji")
-    if not emoji or emoji not in ["❤️", "🔥", "😂", "💀"]:
-        return jsonify({"success": False})
+    emoji = (request.json or {}).get("emoji")
+    if emoji not in ["❤️", "🔥", "😂", "💀"]: return jsonify({"success": False})
 
     if PSYCOPG2_AVAILABLE:
         conn = None
@@ -694,30 +792,17 @@ def api_react(post_id):
                 cursor.execute("SELECT reactions FROM posts WHERE id = %s", (post_id,))
                 row = cursor.fetchone()
                 if row:
-                    try: reactions = json.loads(row["reactions"])
-                    except: reactions = {"❤️": 0, "🔥": 0, "😂": 0, "💀": 0}
-                    
+                    reactions = json.loads(row["reactions"])
                     reactions[emoji] = reactions.get(emoji, 0) + 1
                     cursor.execute("UPDATE posts SET reactions = %s WHERE id = %s", (json.dumps(reactions), post_id))
                     conn.commit()
-                    cursor.close()
-                    conn.close()
                     return jsonify({"success": True, "new_count": reactions[emoji]})
         except Exception as e:
-            print(f"Ошибка реакций в БД: {e}")
             if conn: conn.close()
-    else:
-        for room in MEMORY_POSTS:
-            for post in MEMORY_POSTS[room]:
-                if post["id"] == post_id:
-                    post["reactions"][emoji] += 1
-                    return jsonify({"success": True, "new_count": post["reactions"][emoji]})
-                    
     return jsonify({"success": False})
 
 @app.route("/")
-def index():
-    return redirect("/room/b")
+def index(): return redirect("/room/b")
 
 @app.route("/room/<room_id>")
 def view_room(room_id):
@@ -726,27 +811,28 @@ def view_room(room_id):
     return render_template_string(
         HTML_TEMPLATE, posts=posts, rooms=ROOMS, current_room=room_id, 
         room_title=ROOMS[room_id], current_room_name=ROOMS[room_id].split()[-1],
-        pinned_msg=PINNED_MESSAGES.get(room_id, "")
+        pinned_msg=PINNED_MESSAGES.get(room_id, ""), boss=BOSS, admin_pwd=ADMIN_PASSWORD
     )
 
 @app.route("/create/<room_id>", methods=["POST"])
 def create_post(room_id):
     if room_id not in ROOMS: return redirect("/")
-    
     text = request.form.get("text", "").strip()
     nickname = request.form.get("nickname", "").strip()
-    image_data_uri = request.form.get("image_base64", "").strip()
-    if not image_data_uri: image_data_uri = None
+    image_data_uri = request.form.get("image_base64", "").strip() or None
+    
+    is_private = request.form.get("is_private") == "1"
+    recipient = request.form.get("recipient", "").strip()
 
     if text:
         if not nickname:
             user_ip = request.headers.get('X-Forwarded-For', request.remote_addr) or "127.0.0.1"
             user_id = hashlib.md5(user_ip.encode()).hexdigest()[:4].upper()
             author_name = f"Аноним ## {user_id}"
-        else:
-            author_name = nickname
+        else: author_name = nickname
+        
         current_date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        save_post(room_id, author_name, text, image_data_uri, current_date)
+        save_post(room_id, author_name, text, image_data_uri, current_date, is_private, recipient)
         
     return redirect(f"/room/{room_id}")
 
