@@ -1,7 +1,7 @@
 import os
 import hashlib
 from datetime import datetime
-from flask import Flask, render_template_string, request, redirect
+from flask import Flask, render_template_string, request, redirect, jsonify
 
 try:
     import psycopg2
@@ -12,7 +12,7 @@ except ImportError:
 
 app = Flask(__name__)
 
-# Резервное хранилище прямо в оперативной памяти сервера (если база отключится)
+# Резервное хранилище в оперативной памяти (если Supabase не подключен)
 MEMORY_POSTS = {
     "b": [], "games": [], "code": [], "cats": [], "memes": [], "secret": []
 }
@@ -52,9 +52,9 @@ def init_db():
                 conn.commit()
                 cursor.close()
                 conn.close()
-                print("--- БАЗА ДАННЫХ SUPABASE УСПЕШНО ПОДКЛЮЧЕНА И ИНИЦИАЛИЗИРОВАНА ---")
+                print("--- БАЗА ДАННЫХ SUPABASE УСПЕШНО ИНИЦИАЛИЗИРОВАНА ---")
         except Exception as e:
-            print(f"Предупреждение при инициализации базы: {e}. Используем оперативную память.")
+            print(f"Ошибка инициализации базы: {e}.")
             if conn:
                 conn.close()
 
@@ -71,14 +71,13 @@ def load_posts(room_id):
                 conn.close()
                 return posts
         except Exception as e:
-            print(f"Ошибка чтения базы: {e}. Переключаемся на память сервера.")
+            print(f"Ошибка чтения базы: {e}")
             if conn:
                 conn.close()
                 
     return MEMORY_POSTS.get(room_id, [])
 
 def save_post(room_id, author, text, image_url, date_str):
-    # 1. Пробуем сохранить в вечную базу Supabase
     if PSYCOPG2_AVAILABLE:
         conn = None
         try:
@@ -94,11 +93,11 @@ def save_post(room_id, author, text, image_url, date_str):
                 conn.close()
                 return
         except Exception as e:
-            print(f"Ошибка записи в базу данных: {e}. Сохраняем в память.")
+            print(f"Ошибка записи в базу: {e}")
             if conn:
                 conn.close()
 
-    # 2. Резервный вариант, если база упала
+    # Если база недоступна — пишем в оперативку
     posts = MEMORY_POSTS.get(room_id, [])
     new_id = len(posts) + 1
     new_post = {
@@ -112,6 +111,7 @@ def save_post(room_id, author, text, image_url, date_str):
     posts.insert(0, new_post)
     MEMORY_POSTS[room_id] = posts
 
+# Новый HTML-шаблон с AJAX обновлением, подсветкой комнат и настройками
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -120,25 +120,55 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Мир Идиаканта — {{ room_title }}</title>
     <style>
-        * { box-sizing: border-box; transition: all 0.2s ease; }
+        * { box-sizing: border-box; transition: background 0.2s, color 0.2s; }
         body { 
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
             background: #121212; color: #e5e5e5; padding: 0; margin: 0; 
+            font-size: 15px;
         }
         .app-header {
             background: #1f1f1f; border-bottom: 2px solid #ff9800; padding: 15px;
-            text-align: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.6);
+            display: flex; justify-content: space-between; align-items: center;
+            position: sticky; top: 0; z-index: 100; box-shadow: 0 4px 20px rgba(0,0,0,0.6);
         }
-        .app-header h1 { margin: 0; font-size: 20px; color: #ffb74d; }
+        .app-header h1 { margin: 0; font-size: 18px; color: #ffb74d; }
+        .btn-settings-toggle {
+            background: #333; border: 1px solid #444; color: #fff;
+            padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 14px;
+        }
         .container { max-width: 600px; margin: 0 auto; padding: 15px; }
+        
+        /* Меню комнат */
         .rooms-scroll { display: flex; gap: 10px; overflow-x: auto; padding: 5px 0 12px 0; margin-bottom: 15px; }
         .rooms-scroll::-webkit-scrollbar { height: 4px; }
         .rooms-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
         .room-chip {
             background: #1e1e1e; color: #a0a0a0; text-decoration: none; padding: 10px 16px;
             border-radius: 25px; font-size: 14px; white-space: nowrap; border: 1px solid #2d2d2d;
+            position: relative;
         }
         .room-chip.active { color: #121212; background: linear-gradient(135deg, #ffb74d, #ff9800); border-color: #ff9800; font-weight: bold; }
+        
+        /* КРАСНАЯ ПОДСВЕТКА ДЛЯ НОВЫХ СООБЩЕНИЙ */
+        @keyframes pulse-red {
+            0% { box-shadow: 0 0 5px #ff5252; border-color: #ff5252; }
+            50% { box-shadow: 0 0 15px #ff1744; border-color: #ff1744; background: #2c1313; color: #ff8a80; }
+            100% { box-shadow: 0 0 5px #ff5252; border-color: #ff5252; }
+        }
+        .room-chip.has-new {
+            animation: pulse-red 1.5s infinite;
+            font-weight: bold;
+        }
+
+        /* Окно настроек */
+        .settings-panel {
+            background: #1e1e1e; border: 1px solid #ff9800; padding: 15px; 
+            border-radius: 12px; margin-bottom: 15px; display: none;
+        }
+        .settings-panel h3 { margin-top: 0; color: #ffb74d; font-size: 16px; }
+        .setting-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+        .setting-row select { background: #333; color: #fff; border: 1px solid #555; padding: 6px; border-radius: 4px; }
+
         .post-form { background: #1e1e1e; padding: 16px; border-radius: 14px; margin-bottom: 20px; border: 1px solid #2d2d2d; }
         .input-group { margin-bottom: 12px; }
         .nickname-input {
@@ -170,20 +200,43 @@ HTML_TEMPLATE = """
         .post-img { width: 100%; max-height: 380px; object-fit: contain; display: block; }
     </style>
 </head>
-<body>
+<body class="chat-body">
+
     <div class="app-header">
         <h1>{{ room_title }}</h1>
+        <button class="btn-settings-toggle" onclick="toggleSettings()">⚙️ Настройки</button>
     </div>
+    
     <div class="container">
+        <div id="settingsPanel" class="settings-panel">
+            <h3>⚙️ Персонализация чата</h3>
+            <div class="setting-row">
+                <label>Размер шрифта:</label>
+                <select id="settingFontSize" onchange="applySettings()">
+                    <option value="14px">Мелкий</option>
+                    <option value="15px" selected>Обычный</option>
+                    <option value="17px">Крупный</option>
+                    <option value="19px">Гигантский</option>
+                </select>
+            </div>
+            <div class="setting-row">
+                <label>Звук уведомлений:</label>
+                <select id="settingSound" onchange="applySettings()">
+                    <option value="on">Включен 🔊</option>
+                    <option value="off">Выключен 🔇</option>
+                </select>
+            </div>
+        </div>
+
         <div class="rooms-scroll">
             {% for r_id, r_name in rooms.items() %}
-                <a href="/room/{{ r_id }}" class="room-chip {% if r_id == current_room %}active{% endif %}">
+                <a href="/room/{{ r_id }}" id="room-link-{{ r_id }}" class="room-chip {% if r_id == current_room %}active{% endif %}">
                     {{ r_name }}
                 </a>
             {% endfor %}
         </div>
         
-        <form class="post-form" method="POST" action="/create/{{ current_room }}" onsubmit="saveNick()">
+        <form class="post-form" id="chatForm" onsubmit="sendPostViaAjax(event)">
             <div class="input-group">
                 <input type="text" id="nickname" name="nickname" class="nickname-input" placeholder="🕶️ Твой никнейм (или Аноним)" maxlength="20">
             </div>
@@ -197,9 +250,9 @@ HTML_TEMPLATE = """
             <button type="submit" class="btn-submit">Отправить сообщение</button>
         </form>
 
-        <div class="posts-list">
+        <div class="posts-list" id="postsList">
             {% for post in posts %}
-            <div class="post-card">
+            <div class="post-card" data-post-id="{{ post.id }}">
                 <div class="post-meta">
                     <div>
                         <span class="author-badge">{{ post.author }}</span>
@@ -220,26 +273,185 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             {% else %}
-            <p style="text-align:center; color:#666;">Тут пока пусто... Начни общение первым!</p>
+            <p id="empty-state" style="text-align:center; color:#666;">Тут пока пусто... Начни общение первым!</p>
             {% endfor %}
         </div>
     </div>
 
+    <audio id="notifSound" src="https://assets.mixkit.co/active_storage/sfx/2357/2357-84.wav" preload="auto"></audio>
+
     <script>
+        const currentRoom = "{{ current_room }}";
+        const currentRoomName = "{{ current_room_name }}";
+        let lastKnownPostId = {% if posts %}{{ posts[0].id }}{% else %}0{% endif %};
+        
+        // Хранилище прочитанных ID постов по комнатам для подсветки
+        let roomLastSeen = JSON.parse(localStorage.getItem('room_last_seen') || '{}');
+        roomLastSeen[currentRoom] = lastKnownPostId;
+        localStorage.setItem('room_last_seen', JSON.stringify(roomLastSeen));
+
         window.onload = function() {
+            // Восстановление ника
             const savedNick = localStorage.getItem('user_nick');
             if (savedNick) { document.getElementById('nickname').value = savedNick; }
+            
+            // Загрузка и применение сохраненных настроек
+            const savedFontSize = localStorage.getItem('cfg_font_size') || '15px';
+            const savedSound = localStorage.getItem('cfg_sound') || 'on';
+            document.getElementById('settingFontSize').value = savedFontSize;
+            document.getElementById('settingSound').value = savedSound;
+            applySettings();
+
+            // Запускаем бесконечный цикл проверки обновлений каждые 3 секунды
+            setInterval(checkUpdates, 3000);
         }
-        function saveNick() {
-            const nick = document.getElementById('nickname').value;
-            localStorage.setItem('user_nick', nick);
+
+        function toggleSettings() {
+            const panel = document.getElementById('settingsPanel');
+            panel.style.display = panel.style.display === 'block' ? 'none' : 'block';
         }
+
+        function applySettings() {
+            const fontSize = document.getElementById('settingFontSize').value;
+            const sound = document.getElementById('settingSound').value;
+            
+            localStorage.setItem('cfg_font_size', fontSize);
+            localStorage.setItem('cfg_sound', sound);
+            
+            // Применяем размер шрифта ко всей ленте
+            document.querySelectorAll('.post-text').forEach(el => el.style.fontSize = fontSize);
+        }
+
         function replyTo(postId, author) {
             const textarea = document.getElementById('message_text');
             textarea.value = `>> №${postId} (${author}): ` + textarea.value;
             textarea.focus();
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
+
+        // AJAX отправка сообщения без перезагрузки всей страницы
+        async function sendPostViaAjax(event) {
+            event.preventDefault();
+            const textEl = document.getElementById('message_text');
+            const imgEl = document.getElementById('image_url');
+            const nickEl = document.getElementById('nickname');
+            
+            if(!textEl.value.strip && textEl.value.trim() === "") return;
+            
+            localStorage.setItem('user_nick', nickEl.value);
+
+            const formData = new FormData();
+            formData.append('text', textEl.value);
+            formData.append('image_url', imgEl.value);
+            formData.append('nickname', nickEl.value);
+
+            textEl.value = '';
+            imgEl.value = '';
+
+            try {
+                await fetch(`/create/${currentRoom}`, { method: 'POST', body: formData });
+                checkUpdates(); // Сразу же проверяем обновления, чтобы увидеть свой пост
+            } catch (e) {
+                console.error("Ошибка отправки:", e);
+            }
+        }
+
+        // Функция проверки новых сообщений во всех чатах сразу!
+        async function checkUpdates() {
+            try {
+                const response = await fetch('/api/get_latest_ids');
+                const latestIds = await response.json(); // Приходит словарь вроде {"b": 12, "games": 5...}
+                
+                // 1. Проверяем текущую комнату
+                const latestInCurrent = latestIds[currentRoom] || 0;
+                if (latestInCurrent > lastKnownPostId) {
+                    fetchNewPostsForCurrentRoom();
+                }
+
+                // 2. Проверяем чужие комнаты на предмет новых постов для подсветки красным
+                for (const roomId in latestIds) {
+                    if (roomId !== currentRoom) {
+                        const lastSeen = roomLastSeen[roomId] || 0;
+                        const chip = document.getElementById(`room-link-${roomId}`);
+                        if (chip) {
+                            if (latestIds[roomId] > lastSeen) {
+                                chip.classList.add('has-new'); // Подсвечиваем красным!
+                            } else {
+                                chip.classList.remove('has-new');
+                            }
+                        }
+                    }
+                }
+            } catch (e) {
+                console.stringify("Ошибка проверки обновлений", e);
+            }
+        }
+
+        // Докачиваем только новые посты в текущую комнату
+        async function fetchNewPostsForCurrentRoom() {
+            try {
+                const response = await fetch(`/api/get_posts/${currentRoom}`);
+                const posts = await response.json();
+                
+                const postsList = document.getElementById('postsList');
+                const emptyState = document.getElementById('empty-state');
+                if (emptyState) emptyState.remove();
+
+                // Фильтруем только те, которых у нас ещё нет на экране
+                const newPosts = posts.filter(p => p.id > lastKnownPostId);
+                
+                if (newPosts.length > 0) {
+                    // Воспроизводим звук уведомления, если включен в настройках
+                    if (localStorage.getItem('cfg_sound') !== 'off') {
+                        document.getElementById('notifSound').play().catch(()=>{});
+                    }
+
+                    const currentFontSize = localStorage.getItem('cfg_font_size') || '15px';
+
+                    // Рендерим новые карточки в самый верх ленты
+                    newPosts.forEach(post => {
+                        const postCard = document.createElement('div');
+                        postCard.className = 'post-card';
+                        postCard.setAttribute('data-post-id', post.id);
+                        
+                        let imgHtml = '';
+                        if (post.image_url) {
+                            imgHtml = `
+                                <div class="post-image-wrapper">
+                                    <a href="${post.image_url}" target="_blank">
+                                        <img class="post-img" src="${post.image_url}">
+                                    </a>
+                                </div>`;
+                        }
+
+                        postCard.innerHTML = `
+                            <div class="post-meta">
+                                <div>
+                                    <span class="author-badge">${post.author}</span>
+                                    <span class="room-badge">${currentRoomName}</span>
+                                </div>
+                                <span>№${post.id} • ${post.date}</span>
+                            </div>
+                            <div class="post-text" style="font-size: ${currentFontSize}">${post.text}</div>
+                            ${imgHtml}
+                            <div class="post-footer">
+                                <button type="button" class="btn-reply" onclick="replyTo('${post.id}', '${post.author}')">↩ Ответить</button>
+                            </div>
+                        `;
+                        // Вставляем в начало списка
+                        postsList.insertBefore(postCard, postsList.firstChild);
+                    });
+
+                    // Обновляем счетчики
+                    lastKnownPostId = newPosts[0].id;
+                    roomLastSeen[currentRoom] = lastKnownPostId;
+                    localStorage.setItem('room_last_seen', JSON.stringify(roomLastSeen));
+                }
+            } catch (e) {
+                console.error("Ошибка загрузки новых постов:", e);
+            }
+        }
+
         async function pasteFromClipboard() {
             try {
                 const text = await navigator.clipboard.readText();
@@ -252,6 +464,24 @@ HTML_TEMPLATE = """
 </body>
 </html>
 """
+
+# Новые API эндпоинты для фонового обмена данными (JSON)
+
+@app.route("/api/get_latest_ids")
+def api_get_latest_ids():
+    """Возвращает словарь формата {имя_комнаты: последний_id_поста}"""
+    ids = {}
+    for r_id in ROOMS:
+        posts = load_posts(r_id)
+        ids[r_id] = posts[0]["id"] if posts else 0
+    return jsonify(ids)
+
+@app.route("/api/get_posts/<room_id>")
+def api_get_posts(room_id):
+    """Возвращает список всех постов комнаты в формате JSON"""
+    if room_id not in ROOMS:
+        return jsonify([])
+    return jsonify(load_posts(room_id))
 
 @app.route("/")
 def index():
