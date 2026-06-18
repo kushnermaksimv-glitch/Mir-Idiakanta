@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Мир Идиаканта 2.0 — {{ room_title }}</title>
+    <title>Мир Идиаканта 3.0 — {{ room_title }}</title>
     <style>
         [data-theme="dark"] {
             --bg-main: #0f0f12; --bg-card: #16161f; --bg-header: #1a1a26; --bg-input: #111116;
@@ -32,8 +32,15 @@
             background: var(--bg-input); border: 1px solid var(--border); color: var(--text-main);
             padding: 8px 12px; border-radius: 8px; cursor: pointer; font-size: 13px; font-weight: bold;
         }
+        .btn-admin-panel { background: #d32f2f !important; color: #fff !important; display: none; }
+        
         .container { max-width: 600px; margin: 0 auto; padding: 12px; }
         
+        .banned-container {
+            background: #2c1616; border: 2px solid #ef5350; border-radius: 12px; padding: 30px 15px;
+            text-align: center; margin-top: 50px; box-shadow: 0 0 20px rgba(239,83,80,0.3);
+        }
+
         .pinned-box {
             background: var(--bg-card); border-left: 4px solid var(--accent); padding: 10px;
             border-radius: 0 8px 8px 0; margin-bottom: 12px; font-size: 13px; border: 1px solid var(--border);
@@ -71,7 +78,6 @@
         
         .btn-submit { width: 100%; padding: 12px; background: linear-gradient(135deg, #ffb74d, #ff9800); border: none; color: #121212; font-weight: bold; border-radius: 6px; cursor: pointer; }
         
-        /* Медиа-меню */
         .media-menu-container { margin: 8px 0; }
         .btn-trigger-media {
             background: var(--bg-input); border: 1px solid var(--border); color: var(--accent-light);
@@ -84,21 +90,19 @@
         .media-opt-btn {
             background: var(--bg-card); border: 1px solid var(--border); color: var(--text-main); padding: 8px 12px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: bold; display: flex; align-items: center; gap: 5px;
         }
-        .media-opt-btn:hover { border-color: var(--accent); }
         .sticker-panel { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 8px; border-top: 1px dashed var(--border); padding-top: 8px; width: 100%; }
         .sticker-item { background: var(--bg-card); border: 1px solid var(--border); border-radius: 6px; padding: 6px; text-align: center; font-size: 20px; cursor: pointer; }
-        .sticker-item:hover { transform: scale(1.1); border-color: var(--accent); }
 
         /* Карточки постов */
         .post-card { background: var(--bg-card); padding: 14px; border-radius: 12px; border: 1px solid var(--border); margin-bottom: 10px; position: relative; }
         .post-card.private-messages { background: var(--bg-private) !important; border-color: var(--border-private) !important; }
-        .post-card.gold-skin { background: linear-gradient(135deg, #2c2205, #141002) !important; border-color: #ffd54f !important; box-shadow: 0 0 10px rgba(255,213,79,0.2); }
+        .post-card.gold-skin { background: linear-gradient(135deg, #2c2205, #141002) !important; border-color: #ffd54f !important; box-shadow: 0 0 10px rgba(255,213,79,0.3); }
         
         .post-header-layout { display: flex; gap: 8px; align-items: center; margin-bottom: 6px; border-bottom: 1px solid var(--border); padding-bottom: 6px; }
         .avatar-container { position: relative; width: 40px; height: 40px; }
         .avatar-img { width: 100%; height: 100%; border-radius: 50%; background: #2a2a2a; }
-        .decor-item { position: absolute; top: -5px; right: -5px; font-size: 16px; }
-        .decor-glasses { position: absolute; top: 12px; left: 6px; font-size: 16px; width: 28px; text-align: center; }
+        .decor-item { position: absolute; top: -5px; right: -5px; font-size: 16px; z-index: 2; }
+        .decor-glasses { position: absolute; top: 12px; left: 6px; font-size: 16px; width: 28px; text-align: center; z-index: 2; }
 
         .post-meta-info { flex-grow: 1; display: flex; flex-direction: column; font-size: 12px; }
         .author-badge { color: #81c784; font-weight: bold; }
@@ -114,7 +118,7 @@
         .btn-react { background: var(--bg-input); border: 1px solid var(--border); border-radius: 5px; padding: 3px 6px; font-size: 11px; cursor: pointer; color: var(--text-main); }
         .btn-reply, .btn-pm, .btn-admin-del { background: none; border: none; color: #26a69a; cursor: pointer; font-size: 12px; font-weight: bold; }
         .btn-pm { color: #ba68c8; }
-        .btn-admin-del { color: #ff5252; margin-left: 10px; }
+        .btn-admin-del { color: #ff5252; margin-left: 8px; }
         
         .post-image-wrapper { margin-top: 8px; border-radius: 6px; overflow: hidden; border: 1px solid var(--border); }
         .post-img { width: 100%; max-height: 300px; object-fit: contain; display: block; }
@@ -125,8 +129,9 @@
 <body>
 
     <div class="app-header">
-        <h1>Мир Идиаканта 2.0</h1>
+        <h1>Мир Идиаканта 3.0</h1>
         <div class="header-btns">
+            <button class="btn-toggle btn-admin-panel" id="adminPanelBtn" onclick="toggleAdminPanel()">👑 Админка</button>
             <button class="btn-toggle" onclick="toggleTheme()">🌗 Тема</button>
             <button class="btn-toggle" onclick="toggleSettings()">⚙️ Меню</button>
         </div>
@@ -134,11 +139,25 @@
     
     <div class="container">
         
+        {% if is_banned %}
+        <div class="banned-container">
+            <h2 style="color:#ef5350; margin:0 0 10px 0;">🛑 ДОСТУП ОГРАНИЧЕН</h2>
+            <p style="margin:0; font-size:14px; color:#e57373;">Твой IP-адрес заблокирован Главным Администратором за нарушение правил чата.</p>
+        </div>
+        {% else %}
+
         {% if pinned_msg %}
         <div class="pinned-box">
             📌 <b>Закреплено:</b> {{ pinned_msg }}
         </div>
         {% endif %}
+
+        <div id="adminPanel" style="background: #211010; border: 2px dashed #d32f2f; padding: 12px; border-radius: 10px; margin-bottom: 12px; display: none;">
+            <h3 style="margin: 0 0 8px 0; font-size: 14px; color: #ef5350;">🛠️ Панель Управления Идиакантом:</h3>
+            <div style="display:flex; gap:8px;">
+                <button type="button" class="btn-buy" style="background:#d32f2f; padding:8px;" onclick="adminClearCurrentRoom()">🗑️ Очистить текущую комнату</button>
+            </div>
+        </div>
 
         <div id="settingsPanel" style="background: var(--bg-card); border: 1px solid var(--border); padding: 12px; border-radius: 10px; margin-bottom: 12px; display: none;">
             <h3 style="margin: 0 0 8px 0; font-size: 14px; color: var(--accent-light);">🎒 Твой Кото-Профиль:</h3>
@@ -150,23 +169,23 @@
                 </div>
             </div>
 
-            <h3 style="margin: 8px 0 4px 0; font-size: 14px; color: #4caf50;">🛒 Кот-Маркет:</h3>
+            <h3 style="margin: 8px 0 4px 0; font-size: 14px; color: #4caf50;">🛒 Кот-Маркет (Скины видят все!):</h3>
             <div class="market-grid">
                 <div class="market-item">
                     <span>👓 Крутые Очки</span><br><strong class="coin-count">50 💰</strong><br>
-                    <button class="btn-buy" onclick="buyItem('glasses', 50)">Купить</button>
+                    <button class="btn-buy" id="buy-btn-glasses" onclick="buyItem('glasses', 50)">Купить</button>
                 </div>
                 <div class="market-item">
                     <span>🎩 Цилиндр</span><br><strong class="coin-count">100 💰</strong><br>
-                    <button class="btn-buy" onclick="buyItem('hat', 100)">Купить</button>
+                    <button class="btn-buy" id="buy-btn-hat" onclick="buyItem('hat', 100)">Купить</button>
                 </div>
                 <div class="market-item">
                     <span>🎭 Маска SCP-035</span><br><strong class="coin-count">200 💰</strong><br>
-                    <button class="btn-buy" onclick="buyItem('mask', 200)">Купить</button>
+                    <button class="btn-buy" id="buy-btn-mask" onclick="buyItem('mask', 200)">Купить</button>
                 </div>
                 <div class="market-item">
                     <span>✨ Золотая Карточка</span><br><strong class="coin-count">400 💰</strong><br>
-                    <button class="btn-buy" onclick="buyItem('gold', 400)">Купить</button>
+                    <button class="btn-buy" id="buy-btn-gold" onclick="buyItem('gold', 400)">Купить</button>
                 </div>
             </div>
 
@@ -188,7 +207,7 @@
         
         <form class="post-form" id="chatForm" onsubmit="sendPostViaAjax(event)">
             <div id="pmIndicator" class="pm-selector" style="display: none;">
-                <span>🔒 Личное сообщение для: <span id="pmTarget" style="color:#e040fb;">Ник</span></span>
+                <span>🔒 ЛС для: <span id="pmTarget" style="color:#e040fb;">Ник</span></span>
                 <button type="button" style="background:none; border:none; color:#ff5252; cursor:pointer; font-weight:bold;" onclick="disablePM()">❌ Отмена</button>
             </div>
 
@@ -201,7 +220,7 @@
 
             {% if current_room == 'pm' %}
             <div style="margin-bottom: 8px;" id="recipientFieldBox">
-                <input type="text" id="direct_recipient" name="direct_recipient" class="nickname-input" style="color:#e040fb; border-color:var(--border-private);" placeholder="👤 Кому отправить ЛС? (Введите точный ник)" maxlength="20">
+                <input type="text" id="direct_recipient" name="direct_recipient" class="nickname-input" style="color:#e040fb; border-color:var(--border-private);" placeholder="👤 Кому отправить ЛС? (Точный ник)" maxlength="20">
             </div>
             {% endif %}
 
@@ -210,11 +229,11 @@
             </div>
 
             <div class="media-menu-container">
-                <button type="button" class="btn-trigger-media" onclick="toggleMediaMenu()">📎 Добавить файл <span id="media-status" style="color:#81c784;"></span></button>
+                <button type="button" class="btn-trigger-media" onclick="toggleMediaMenu()">📎 Добавить медиа <span id="media-status" style="color:#81c784;"></span></button>
                 
                 <div class="media-options-box" id="mediaBox">
                     <div class="media-buttons-row">
-                        <button type="button" class="media-opt-btn" onclick="triggerFileInput('gallery')">🖼️ Фото (Галерея)</button>
+                        <button type="button" class="media-opt-btn" onclick="triggerFileInput('gallery')">🖼️ Галерея</button>
                         <button type="button" class="media-opt-btn" onclick="triggerFileInput('camera')">📷 Камера</button>
                         <button type="button" class="media-opt-btn" onclick="toggleStickers()">✨ Стикеры</button>
                     </div>
@@ -235,7 +254,7 @@
 
         <div class="posts-list" id="postsList">
             {% for post in posts %}
-            <div class="post-card {% if post.is_private %}private-messages{% endif %}" data-post-id="{{ post.id }}" id="post-{{ post.id }}" data-author="{{ post.author }}">
+            <div class="post-card {% if post.is_private %}private-messages{% endif %}" data-post-id="{{ post.id }}" id="post-{{ post.id }}" data-author="{{ post.author }}" data-skins='{{ post.author_skins | tojson }}'>
                 <div class="post-header-layout">
                     <div class="avatar-container">
                         <img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed={{ post.author | urlencode }}&backgroundColor=b6e3f4">
@@ -272,26 +291,36 @@
                         {% endfor %}
                     </div>
                     <div>
-                        <button type="button" class="btn-pm" onclick="enablePM('{{ post.author }}')">🔒 Ответить в ЛС</button>
+                        <button type="button" class="btn-pm" onclick="enablePM('{{ post.author }}')">🔒 ЛС</button>
                         <button type="button" class="btn-reply" onclick="replyTo('{{ post.id }}')">↩ Ответить</button>
-                        <button type="button" class="btn-admin-del" id="del-btn-{{ post.id }}" style="display:none;" onclick="deletePost('{{ post.id }}')">🗑️ Удалить</button>
+                        <button type="button" class="btn-admin-del admin-action-btn" style="display:none;" onclick="deletePost('{{ post.id }}')">🗑️ Удалить</button>
                     </div>
                 </div>
             </div>
             {% endfor %}
         </div>
+        {% endif %}
     </div>
 
     <script>
         const currentRoom = "{{ current_room }}";
-        let lastKnownPostId = {% if posts %}{{ posts[0].id }}{% else %}0{% endif %};
+        let lastKnownPostId = {% if posts and not is_banned %}{{ posts[0].id }}{% else %}0{% endif %};
         let globalSelectedImageBase64 = null;
         
+        // Встроенный приятный системный звук получения уведомлений
+        const notifyAudio = new Audio('https://assets.mixkit.co/active_storage/sfx/2357/2357-84.wav');
         let myProfile = JSON.parse(localStorage.getItem('koto_profile') || '{"xp":0,"coins":20,"lvl":1,"items":[]}');
 
         window.onload = function() {
+            if (document.querySelector('.banned-container')) return; // Если бан, ничего не инициализируем
+
             if (!localStorage.getItem('koto_profile')) { saveProfile(); }
             updateProfileUI();
+
+            // Запрашиваем пуш-уведомления сразу при входе
+            if (Notification.permission === "default") {
+                Notification.requestPermission();
+            }
 
             const savedNick = localStorage.getItem('user_nick');
             if (savedNick) { 
@@ -306,7 +335,7 @@
 
             applySettings();
             formatRepliesInDOM();
-            applyPurchasedSkins();
+            renderAllSkinsFromData();
             setInterval(checkUpdates, 3000);
         }
 
@@ -317,7 +346,8 @@
 
         function checkAdminStatus(nick) {
             const isKing = (nick === "{{ admin_pwd }}");
-            document.querySelectorAll(".btn-admin-del").forEach(b => b.style.display = isKing ? "inline-block" : "none");
+            document.getElementById("adminPanelBtn").style.display = isKing ? "inline-block" : "none";
+            document.querySelectorAll(".admin-action-btn").forEach(b => b.style.display = isKing ? "inline-block" : "none");
         }
 
         function saveProfile() { localStorage.setItem('koto_profile', JSON.stringify(myProfile)); }
@@ -326,6 +356,11 @@
             document.getElementById('profLvl').innerText = myProfile.lvl;
             document.getElementById('profXp').innerText = myProfile.xp;
             document.getElementById('profCoins').innerText = myProfile.coins;
+            
+            myProfile.items.forEach(item => {
+                const btn = document.getElementById(`buy-btn-${item}`);
+                if(btn) { btn.innerText = "Надето"; btn.style.background = "#777"; btn.disabled = true; }
+            });
         }
 
         function toggleMediaMenu() {
@@ -338,6 +373,11 @@
             p.style.display = p.style.display === 'grid' ? 'none' : 'grid';
         }
 
+        function toggleAdminPanel() {
+            const p = document.getElementById('adminPanel');
+            p.style.display = p.style.display === 'block' ? 'none' : 'block';
+        }
+
         function triggerFileInput(type) {
             if(type === 'gallery') document.getElementById('file_gallery').click();
             if(type === 'camera') document.getElementById('file_camera').click();
@@ -346,39 +386,39 @@
         async function handleMediaSelect(inputEl) {
             if(inputEl.files.length > 0) {
                 globalSelectedImageBase64 = await processImage(inputEl.files[0]);
-                document.getElementById('media-status').innerText = "(📎 Файл добавлен)";
+                document.getElementById('media-status').innerText = "(🖼️ Добавлено)";
                 document.getElementById('mediaBox').style.display = 'none';
             }
         }
 
         function buyItem(itemId, cost) {
             if (myProfile.coins < cost) { alert("Недостаточно Кото-Коинов!"); return; }
-            if (myProfile.items.includes(itemId)) { alert("Этот предмет уже куплен!"); return; }
+            if (myProfile.items.includes(itemId)) return;
             myProfile.coins -= cost;
             myProfile.items.push(itemId);
-            saveProfile(); updateProfileUI(); applyPurchasedSkins();
-            alert("Куплено!");
+            saveProfile(); updateProfileUI();
+            alert("Успешно куплено и надето на твоего кота!");
+            location.reload();
         }
 
-        function applyPurchasedSkins() {
-            const myNick = localStorage.getItem('user_nick') || '';
-            if(!myNick) return;
+        function renderAllSkinsFromData() {
             document.querySelectorAll(".post-card").forEach(card => {
-                if(card.getAttribute("data-author") === myNick) {
+                const skinsRaw = card.getAttribute("data-skins");
+                if(!skinsRaw) return;
+                try {
+                    const skins = JSON.parse(skinsRaw);
                     const avBox = card.querySelector(".avatar-container");
-                    if (myProfile.items.includes('glasses') && !avBox.querySelector(".decor-glasses")) {
+                    if(skins.includes('glasses') && !avBox.querySelector(".decor-glasses")) {
                         avBox.innerHTML += '<div class="decor-glasses">👓</div>';
                     }
-                    if (myProfile.items.includes('hat') && !avBox.querySelector(".decor-hat")) {
+                    if(skins.includes('hat') && !avBox.querySelector(".decor-hat")) {
                         avBox.innerHTML += '<div class="decor-item decor-hat">🎩</div>';
                     }
-                    if (myProfile.items.includes('mask') && !avBox.querySelector(".decor-mask")) {
+                    if(skins.includes('mask') && !avBox.querySelector(".decor-mask")) {
                         avBox.innerHTML += '<div class="decor-item decor-mask">🎭</div>';
                     }
-                    if (myProfile.items.includes('gold')) { card.classList.add("gold-skin"); }
-                    
-                    card.querySelector(".level-badge").innerText = `Lvl ${myProfile.lvl}`;
-                }
+                    if(skins.includes('gold')) { card.classList.add("gold-skin"); }
+                } catch(e){}
             });
         }
 
@@ -406,7 +446,7 @@
             if (myProfile.xp >= nextLvlXp) {
                 myProfile.xp -= nextLvlXp;
                 myProfile.lvl += 1;
-                alert(`🚀 Уровень повышен! Теперь ты Lvl ${myProfile.lvl}!`);
+                alert(`🚀 УРОВЕНЬ ПОВЫШЕН! Теперь ты Lvl ${myProfile.lvl}!`);
             }
         }
 
@@ -449,11 +489,26 @@
         }
 
         async function deletePost(postId) {
-            if(!confirm("Удалить пост?")) return;
+            if(!confirm("Удалить этот пост навсегда?")) return;
+            const myNick = localStorage.getItem('user_nick') || '';
             try {
-                const res = await fetch(`/api/delete/${postId}`, { method: 'POST' });
+                const res = await fetch(`/api/delete/${postId}?user=${encodeURIComponent(myNick)}`, { method: 'POST' });
                 const d = await res.json();
                 if(d.success) { document.getElementById(`post-${postId}`).remove(); }
+            } catch(e){}
+        }
+
+        async function adminClearCurrentRoom() {
+            if(!confirm("Ты точно хочешь УДАЛИТЬ ВСЕ сообщения из этой комнаты?")) return;
+            const myNick = localStorage.getItem('user_nick') || '';
+            try {
+                const res = await fetch('/api/admin/clear_room', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ password: myNick, room_id: currentRoom })
+                });
+                const d = await res.json();
+                if(d.success) { location.reload(); } else { alert(d.error); }
             } catch(e){}
         }
 
@@ -466,12 +521,12 @@
                     img.src = event.target.result;
                     img.onload = function () {
                         const canvas = document.createElement('canvas');
-                        const MAX_WIDTH = 1000;
+                        const MAX_WIDTH = 800;
                         let w = img.width, h = img.height;
                         if (w > MAX_WIDTH) { h *= MAX_WIDTH / w; w = MAX_WIDTH; }
                         canvas.width = w; canvas.height = h;
                         canvas.getContext('2d').drawImage(img, 0, 0, w, h);
-                        resolve(canvas.width > 0 ? canvas.toDataURL('image/jpeg', 0.7) : null);
+                        resolve(canvas.toDataURL('image/jpeg', 0.65));
                     };
                 };
             });
@@ -482,6 +537,7 @@
             const formData = new FormData();
             formData.append('text', ` [Стикер ${emoji}] `);
             formData.append('nickname', nickEl.value);
+            formData.append('my_skins', JSON.stringify(myProfile.items));
 
             let isPrivate = document.getElementById("is_private").value;
             let rcpt = document.getElementById("recipient").value;
@@ -489,12 +545,11 @@
             if (currentRoom === 'pm') {
                 isPrivate = "1";
                 rcpt = document.getElementById("direct_recipient").value;
-                if(!rcpt) { alert("Укажите ник получателя для отправки стикера!"); return; }
+                if(!rcpt) { alert("Укажи ник получателя стикера!"); return; }
             }
 
             formData.append('is_private', isPrivate);
             formData.append('recipient', rcpt);
-
             document.getElementById('mediaBox').style.display = 'none';
 
             try {
@@ -502,7 +557,7 @@
                 myProfile.xp += 15; myProfile.coins += 5;
                 checkLvlUp(); saveProfile(); updateProfileUI();
                 checkUpdates();
-            } catch (e) { console.error(e); }
+            } catch (e) {}
         }
 
         async function sendPostViaAjax(event) {
@@ -515,6 +570,8 @@
             const formData = new FormData();
             formData.append('text', textEl.value);
             formData.append('nickname', nickEl.value);
+            // Отправляем список наших скинов на сервер, чтобы их записали в БД к этому посту
+            formData.append('my_skins', JSON.stringify(myProfile.items));
 
             let isPrivate = document.getElementById("is_private").value;
             let rcpt = document.getElementById("recipient").value;
@@ -522,7 +579,7 @@
             if (currentRoom === 'pm') {
                 isPrivate = "1";
                 rcpt = document.getElementById("direct_recipient").value;
-                if(!rcpt) { alert("Укажите ник получателя личного сообщения!"); return; }
+                if(!rcpt) { alert("Укажи ник получателя!"); return; }
             }
 
             formData.append('is_private', isPrivate);
@@ -542,7 +599,7 @@
                 myProfile.xp += 15; myProfile.coins += 5;
                 checkLvlUp(); saveProfile(); updateProfileUI();
                 checkUpdates();
-            } catch (e) { console.error(e); }
+            } catch (e) {}
         }
 
         async function checkUpdates() {
@@ -564,6 +621,19 @@
                 const newPosts = posts.filter(p => p.id > lastKnownPostId);
                 
                 if (newPosts.length > 0) {
+                    // Проигрываем звук и шлём Push-уведомление, если сообщение не от нас
+                    const newestPost = newPosts[0];
+                    if (newestPost.author !== myNick) {
+                        notifyAudio.play().catch(()=>{}); // Воспроизводим звук уведомления
+                        
+                        if (document.hidden && Notification.permission === "granted") {
+                            new Notification(`Идиаканта: ${newestPost.author}`, {
+                                body: newestPost.text,
+                                icon: 'https://api.dicebear.com/7.x/bottts-neutral/svg?seed=' + encodeURIComponent(newestPost.author)
+                            });
+                        }
+                    }
+
                     newPosts.forEach(post => {
                         if (document.getElementById(`post-${post.id}`)) return;
                         
@@ -572,6 +642,7 @@
                         card.id = `post-${post.id}`;
                         card.setAttribute('data-post-id', post.id);
                         card.setAttribute('data-author', post.author);
+                        card.setAttribute('data-skins', JSON.stringify(post.author_skins));
                         
                         let imgHtml = post.image_url ? `<div class="post-image-wrapper"><a href="${post.image_url}" target="_blank"><img class="post-img" src="${post.image_url}"></a></div>` : '';
                         let reactHtml = '';
@@ -584,7 +655,7 @@
                                 <div class="avatar-container"><img class="avatar-img" src="https://api.dicebear.com/7.x/bottts-neutral/svg?seed=${encodeURIComponent(post.author)}&backgroundColor=b6e3f4"></div>
                                 <div class="post-meta-info">
                                     <div><span class="author-badge">${post.author}</span><span class="level-badge">Lvl 1</span></div>
-                                    <span class="room-badge">${post.is_private ? '🔒 ЛС для: ' + post.recipient : 'Текущая комната'}</span>
+                                    <span class="room-badge">${post.is_private ? '🔒 ЛС для: ' + post.recipient : 'Обновлено'}</span>
                                 </div>
                                 <div class="post-id-date"><div>№${post.id}</div><div>${post.date}</div></div>
                             </div>
@@ -593,9 +664,9 @@
                             <div class="post-footer-layout">
                                 <div class="reactions-bar">${reactHtml}</div>
                                 <div>
-                                    <button type="button" class="btn-pm" onclick="enablePM('${post.author}')">🔒 Ответить в ЛС</button>
+                                    <button type="button" class="btn-pm" onclick="enablePM('${post.author}')">🔒 ЛС</button>
                                     <button type="button" class="btn-reply" onclick="replyTo('${post.id}')">↩ Ответить</button>
-                                    <button type="button" class="btn-admin-del" id="del-btn-${post.id}" style="display:none;" onclick="deletePost('${post.id}')">🗑️ Удалить</button>
+                                    <button type="button" class="btn-admin-del admin-action-btn" style="display:none;" onclick="deletePost('${post.id}')">🗑️ Удалить</button>
                                 </div>
                             </div>
                         `;
@@ -603,7 +674,7 @@
                     });
 
                     lastKnownPostId = posts[0].id;
-                    formatRepliesInDOM(); applyPurchasedSkins(); checkAdminStatus(myNick);
+                    formatRepliesInDOM(); renderAllSkinsFromData(); checkAdminStatus(myNick);
                 }
             } catch (e) {}
         }
