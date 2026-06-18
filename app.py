@@ -1,5 +1,6 @@
 import os
 import hashlib
+import base64
 from datetime import datetime
 from flask import Flask, render_template_string, request, redirect, jsonify
 
@@ -11,6 +12,9 @@ except ImportError:
     PSYCOPG2_AVAILABLE = False
 
 app = Flask(__name__)
+
+# Ограничиваем максимальный размер загружаемого файла до 5 Мегабайт, чтобы сервер не перегружался
+app.config['MAX_CONTENT_LENGTH'] = 5 * 1024 * 1024
 
 # Резервное хранилище в оперативной памяти (если Supabase не подключен)
 MEMORY_POSTS = {
@@ -39,6 +43,7 @@ def init_db():
             conn = get_db_connection()
             if conn:
                 cursor = conn.cursor()
+                # Создаем таблицу. Теперь поле image_url может хранить и длинные Base64-строки картинок
                 cursor.execute("""
                     CREATE TABLE IF NOT EXISTS posts (
                         id SERIAL PRIMARY KEY,
@@ -77,7 +82,7 @@ def load_posts(room_id):
                 
     return MEMORY_POSTS.get(room_id, [])
 
-def save_post(room_id, author, text, image_url, date_str):
+def save_post(room_id, author, text, image_data, date_str):
     if PSYCOPG2_AVAILABLE:
         conn = None
         try:
@@ -86,7 +91,7 @@ def save_post(room_id, author, text, image_url, date_str):
                 cursor = conn.cursor()
                 cursor.execute(
                     "INSERT INTO posts (room, author, text, image_url, date) VALUES (%s, %s, %s, %s, %s)",
-                    (room_id, author, text, image_url, date_str)
+                    (room_id, author, text, image_data, date_str)
                 )
                 conn.commit()
                 cursor.close()
@@ -97,7 +102,7 @@ def save_post(room_id, author, text, image_url, date_str):
             if conn:
                 conn.close()
 
-    # Если база недоступна — пишем в оперативку
+    # Резервный вариант в ОЗУ
     posts = MEMORY_POSTS.get(room_id, [])
     new_id = len(posts) + 1
     new_post = {
@@ -105,13 +110,12 @@ def save_post(room_id, author, text, image_url, date_str):
         "room": room_id,
         "author": author,
         "text": text,
-        "image_url": image_url,
+        "image_url": image_data,
         "date": date_str
     }
     posts.insert(0, new_post)
     MEMORY_POSTS[room_id] = posts
 
-# Новый HTML-шаблон с AJAX обновлением, подсветкой комнат и настройками
 HTML_TEMPLATE = """
 <!DOCTYPE html>
 <html lang="ru">
@@ -138,7 +142,6 @@ HTML_TEMPLATE = """
         }
         .container { max-width: 600px; margin: 0 auto; padding: 15px; }
         
-        /* Меню комнат */
         .rooms-scroll { display: flex; gap: 10px; overflow-x: auto; padding: 5px 0 12px 0; margin-bottom: 15px; }
         .rooms-scroll::-webkit-scrollbar { height: 4px; }
         .rooms-scroll::-webkit-scrollbar-thumb { background: #333; border-radius: 10px; }
@@ -149,18 +152,13 @@ HTML_TEMPLATE = """
         }
         .room-chip.active { color: #121212; background: linear-gradient(135deg, #ffb74d, #ff9800); border-color: #ff9800; font-weight: bold; }
         
-        /* КРАСНАЯ ПОДСВЕТКА ДЛЯ НОВЫХ СООБЩЕНИЙ */
         @keyframes pulse-red {
             0% { box-shadow: 0 0 5px #ff5252; border-color: #ff5252; }
             50% { box-shadow: 0 0 15px #ff1744; border-color: #ff1744; background: #2c1313; color: #ff8a80; }
             100% { box-shadow: 0 0 5px #ff5252; border-color: #ff5252; }
         }
-        .room-chip.has-new {
-            animation: pulse-red 1.5s infinite;
-            font-weight: bold;
-        }
+        .room-chip.has-new { animation: pulse-red 1.5s infinite; font-weight: bold; }
 
-        /* Окно настроек */
         .settings-panel {
             background: #1e1e1e; border: 1px solid #ff9800; padding: 15px; 
             border-radius: 12px; margin-bottom: 15px; display: none;
@@ -179,9 +177,20 @@ HTML_TEMPLATE = """
             width: 100%; padding: 12px; border-radius: 8px; border: 1px solid #333; 
             background: #151515; color: #fff; font-size: 15px; resize: none;
         }
-        .url-box { display: flex; gap: 8px; }
-        .url-box input { flex: 1; padding: 12px; border-radius: 8px; border: 1px solid #333; background: #151515; color: #fff; }
-        .btn-paste { padding: 0 15px; background: #26a69a; border: none; color: white; border-radius: 8px; cursor: pointer; }
+        
+        /* Стильный блок выбора файла */
+        .file-input-wrapper {
+            position: relative; overflow: hidden; display: inline-block; width: 100%;
+        }
+        .btn-file {
+            border: 1px dashed #555; color: #b0b0b0; background-color: #151515;
+            padding: 12px; border-radius: 8px; font-size: 14px; font-weight: bold;
+            display: block; text-align: center; cursor: pointer;
+        }
+        .file-input-wrapper input[type=file] {
+            font-size: 100px; position: absolute; left: 0; top: 0; opacity: 0; cursor: pointer;
+        }
+
         .btn-submit { 
             width: 100%; padding: 14px; background: linear-gradient(135deg, #ffb74d, #ff9800); 
             border: none; color: #121212; font-weight: bold; font-size: 16px; border-radius: 8px; cursor: pointer; margin-top: 10px;
@@ -200,7 +209,7 @@ HTML_TEMPLATE = """
         .post-img { width: 100%; max-height: 380px; object-fit: contain; display: block; }
     </style>
 </head>
-<body class="chat-body">
+<body>
 
     <div class="app-header">
         <h1>{{ room_title }}</h1>
@@ -243,10 +252,14 @@ HTML_TEMPLATE = """
             <div class="input-group">
                 <textarea id="message_text" name="text" rows="3" placeholder="Напиши сообщение в этот чат..." required></textarea>
             </div>
-            <div class="input-group url-box">
-                <input type="url" id="image_url" name="image_url" placeholder="🔗 Ссылка на картинку">
-                <button type="button" class="btn-paste" onclick="pasteFromClipboard()">📋</button>
+            
+            <div class="input-group">
+                <div class="file-input-wrapper">
+                    <span class="btn-file" id="file-label">🖼️ Прикрепить фото (до 5 МБ)</span>
+                    <input type="file" id="image_file" name="image_file" accept="image/*" onchange="updateFileLabel()">
+                </div>
             </div>
+            
             <button type="submit" class="btn-submit">Отправить сообщение</button>
         </form>
 
@@ -285,25 +298,36 @@ HTML_TEMPLATE = """
         const currentRoomName = "{{ current_room_name }}";
         let lastKnownPostId = {% if posts %}{{ posts[0].id }}{% else %}0{% endif %};
         
-        // Хранилище прочитанных ID постов по комнатам для подсветки
         let roomLastSeen = JSON.parse(localStorage.getItem('room_last_seen') || '{}');
         roomLastSeen[currentRoom] = lastKnownPostId;
         localStorage.setItem('room_last_seen', JSON.stringify(roomLastSeen));
 
         window.onload = function() {
-            // Восстановление ника
             const savedNick = localStorage.getItem('user_nick');
             if (savedNick) { document.getElementById('nickname').value = savedNick; }
             
-            // Загрузка и применение сохраненных настроек
             const savedFontSize = localStorage.getItem('cfg_font_size') || '15px';
             const savedSound = localStorage.getItem('cfg_sound') || 'on';
             document.getElementById('settingFontSize').value = savedFontSize;
             document.getElementById('settingSound').value = savedSound;
             applySettings();
 
-            // Запускаем бесконечный цикл проверки обновлений каждые 3 секунды
             setInterval(checkUpdates, 3000);
+        }
+
+        // Показывает имя выбранного файла на кнопке
+        function updateFileLabel() {
+            const fileInput = document.getElementById('image_file');
+            const label = document.getElementById('file-label');
+            if (fileInput.files.length > 0) {
+                label.innerText = `✅ Выбрано: ${fileInput.files[0].name.id ? fileInput.files[0].name.substring(0,20) : fileInput.files[0].name}`;
+                label.style.borderColor = '#ff9800';
+                label.style.color = '#ffb74d';
+            } else {
+                label.innerText = "🖼️ Прикрепить фото (до 5 МБ)";
+                label.style.borderColor = '#555';
+                label.style.color = '#b0b0b0';
+            }
         }
 
         function toggleSettings() {
@@ -313,12 +337,8 @@ HTML_TEMPLATE = """
 
         function applySettings() {
             const fontSize = document.getElementById('settingFontSize').value;
-            const sound = document.getElementById('settingSound').value;
-            
             localStorage.setItem('cfg_font_size', fontSize);
-            localStorage.setItem('cfg_sound', sound);
-            
-            // Применяем размер шрифта ко всей ленте
+            localStorage.setItem('cfg_sound', document.getElementById('settingSound').value);
             document.querySelectorAll('.post-text').forEach(el => el.style.fontSize = fontSize);
         }
 
@@ -329,53 +349,52 @@ HTML_TEMPLATE = """
             window.scrollTo({ top: 0, behavior: 'smooth' });
         }
 
-        // AJAX отправка сообщения без перезагрузки всей страницы
         async function sendPostViaAjax(event) {
             event.preventDefault();
             const textEl = document.getElementById('message_text');
-            const imgEl = document.getElementById('image_url');
+            const fileEl = document.getElementById('image_file');
             const nickEl = document.getElementById('nickname');
             
-            if(!textEl.value.strip && textEl.value.trim() === "") return;
+            if(textEl.value.trim() === "") return;
             
             localStorage.setItem('user_nick', nickEl.value);
 
             const formData = new FormData();
             formData.append('text', textEl.value);
-            formData.append('image_url', imgEl.value);
             formData.append('nickname', nickEl.value);
+            if (fileEl.files.length > 0) {
+                formData.append('image_file', fileEl.files[0]);
+            }
 
             textEl.value = '';
-            imgEl.value = '';
+            fileEl.value = '';
+            updateFileLabel(); // Сбрасываем текст кнопки файла
 
             try {
                 await fetch(`/create/${currentRoom}`, { method: 'POST', body: formData });
-                checkUpdates(); // Сразу же проверяем обновления, чтобы увидеть свой пост
+                checkUpdates();
             } catch (e) {
                 console.error("Ошибка отправки:", e);
             }
         }
 
-        // Функция проверки новых сообщений во всех чатах сразу!
         async function checkUpdates() {
             try {
                 const response = await fetch('/api/get_latest_ids');
-                const latestIds = await response.json(); // Приходит словарь вроде {"b": 12, "games": 5...}
+                const latestIds = await response.json();
                 
-                // 1. Проверяем текущую комнату
                 const latestInCurrent = latestIds[currentRoom] || 0;
                 if (latestInCurrent > lastKnownPostId) {
                     fetchNewPostsForCurrentRoom();
                 }
 
-                // 2. Проверяем чужие комнаты на предмет новых постов для подсветки красным
                 for (const roomId in latestIds) {
                     if (roomId !== currentRoom) {
                         const lastSeen = roomLastSeen[roomId] || 0;
                         const chip = document.getElementById(`room-link-${roomId}`);
                         if (chip) {
                             if (latestIds[roomId] > lastSeen) {
-                                chip.classList.add('has-new'); // Подсвечиваем красным!
+                                chip.classList.add('has-new');
                             } else {
                                 chip.classList.remove('has-new');
                             }
@@ -383,11 +402,10 @@ HTML_TEMPLATE = """
                     }
                 }
             } catch (e) {
-                console.stringify("Ошибка проверки обновлений", e);
+                console.error("Ошибка обновления", e);
             }
         }
 
-        // Докачиваем только новые посты в текущую комнату
         async function fetchNewPostsForCurrentRoom() {
             try {
                 const response = await fetch(`/api/get_posts/${currentRoom}`);
@@ -397,18 +415,15 @@ HTML_TEMPLATE = """
                 const emptyState = document.getElementById('empty-state');
                 if (emptyState) emptyState.remove();
 
-                // Фильтруем только те, которых у нас ещё нет на экране
                 const newPosts = posts.filter(p => p.id > lastKnownPostId);
                 
                 if (newPosts.length > 0) {
-                    // Воспроизводим звук уведомления, если включен в настройках
                     if (localStorage.getItem('cfg_sound') !== 'off') {
                         document.getElementById('notifSound').play().catch(()=>{});
                     }
 
                     const currentFontSize = localStorage.getItem('cfg_font_size') || '15px';
 
-                    // Рендерим новые карточки в самый верх ленты
                     newPosts.forEach(post => {
                         const postCard = document.createElement('div');
                         postCard.className = 'post-card';
@@ -430,7 +445,7 @@ HTML_TEMPLATE = """
                                     <span class="author-badge">${post.author}</span>
                                     <span class="room-badge">${currentRoomName}</span>
                                 </div>
-                                <span>№${post.id} • ${post.date}</span>
+                                <span>№${post.id} • {{ post.date }}</span>
                             </div>
                             <div class="post-text" style="font-size: ${currentFontSize}">${post.text}</div>
                             ${imgHtml}
@@ -438,11 +453,9 @@ HTML_TEMPLATE = """
                                 <button type="button" class="btn-reply" onclick="replyTo('${post.id}', '${post.author}')">↩ Ответить</button>
                             </div>
                         `;
-                        // Вставляем в начало списка
                         postsList.insertBefore(postCard, postsList.firstChild);
                     });
 
-                    // Обновляем счетчики
                     lastKnownPostId = newPosts[0].id;
                     roomLastSeen[currentRoom] = lastKnownPostId;
                     localStorage.setItem('room_last_seen', JSON.stringify(roomLastSeen));
@@ -451,25 +464,13 @@ HTML_TEMPLATE = """
                 console.error("Ошибка загрузки новых постов:", e);
             }
         }
-
-        async function pasteFromClipboard() {
-            try {
-                const text = await navigator.clipboard.readText();
-                if (text.startsWith('http://') || text.startsWith('https://')) {
-                    document.getElementById('image_url').value = text;
-                }
-            } catch (err) {}
-        }
     </script>
 </body>
 </html>
 """
 
-# Новые API эндпоинты для фонового обмена данными (JSON)
-
 @app.route("/api/get_latest_ids")
 def api_get_latest_ids():
-    """Возвращает словарь формата {имя_комнаты: последний_id_поста}"""
     ids = {}
     for r_id in ROOMS:
         posts = load_posts(r_id)
@@ -478,7 +479,6 @@ def api_get_latest_ids():
 
 @app.route("/api/get_posts/<room_id>")
 def api_get_posts(room_id):
-    """Возвращает список всех постов комнаты в формате JSON"""
     if room_id not in ROOMS:
         return jsonify([])
     return jsonify(load_posts(room_id))
@@ -501,12 +501,24 @@ def view_room(room_id):
 def create_post(room_id):
     if room_id not in ROOMS:
         return redirect("/")
-    text = request.form.get("text", "").strip()
-    image_url = request.form.get("image_url", "").strip()
-    nickname = request.form.get("nickname", "").strip()
     
+    text = request.form.get("text", "").strip()
+    nickname = request.form.get("nickname", "").strip()
+    file = request.files.get("image_file")
+    
+    image_data_uri = None
+    
+    # Если файл прикреплен, кодируем его в Base64 текстовую строку
+    if file and file.filename != '':
+        try:
+            file_bytes = file.read()
+            encoded_string = base64.b64encode(file_bytes).decode('utf-8')
+            # Формируем Data URI строку, которую браузер легко превратит обратно в фото
+            image_data_uri = f"data:{file.mimetype};base64,{encoded_string}"
+        except Exception as e:
+            print(f"Ошибка обработки изображения: {e}")
+
     if text:
-        valid_url = image_url if image_url.startswith(("http://", "https://")) else None
         if not nickname:
             user_ip = request.headers.get('X-Forwarded-For', request.remote_addr) or "127.0.0.1"
             user_id = hashlib.md5(user_ip.encode()).hexdigest()[:4].upper()
@@ -514,7 +526,7 @@ def create_post(room_id):
         else:
             author_name = nickname
         current_date = datetime.now().strftime("%d.%m.%Y %H:%M")
-        save_post(room_id, author_name, text, valid_url, current_date)
+        save_post(room_id, author_name, text, image_data_uri, current_date)
         
     return redirect(f"/room/{room_id}")
 
