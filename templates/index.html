@@ -570,7 +570,6 @@
             const formData = new FormData();
             formData.append('text', textEl.value);
             formData.append('nickname', nickEl.value);
-            // Отправляем список наших скинов на сервер, чтобы их записали в БД к этому посту
             formData.append('my_skins', JSON.stringify(myProfile.items));
 
             let isPrivate = document.getElementById("is_private").value;
@@ -602,14 +601,58 @@
             } catch (e) {}
         }
 
+        // Улучшенная функция checkUpdates для глобальной проверки комнат
         async function checkUpdates() {
             try {
                 const myNick = localStorage.getItem('user_nick') || '';
                 const response = await fetch(`/api/get_latest_ids?user=${encodeURIComponent(myNick)}`);
                 const latestIds = await response.json();
+                
+                // 1. Проверяем текущую комнату
                 const latestInCurrent = latestIds[currentRoom] || 0;
-                if (latestInCurrent > lastKnownPostId) { fetchNewPostsForCurrentRoom(); }
+                if (latestInCurrent > lastKnownPostId) { 
+                    fetchNewPostsForCurrentRoom(); 
+                }
+                
+                // 2. Глобальная фоновая проверка остальных комнат
+                for (const rId in latestIds) {
+                    if (rId === currentRoom) continue; 
+                    
+                    let lastIdForRoom = parseInt(localStorage.getItem(`last_id_room_${rId}`) || '0');
+                    
+                    if (lastIdForRoom === 0) {
+                        localStorage.setItem(`last_id_room_${rId}`, latestIds[rId]);
+                        continue;
+                    }
+                    
+                    if (latestIds[rId] > lastIdForRoom) {
+                        localStorage.setItem(`last_id_room_${rId}`, latestIds[rId]);
+                        triggerBackgroundNotification(rId); 
+                    }
+                }
             } catch (e) {}
+        }
+
+        // Функция обработки фонового сообщения
+        async function triggerBackgroundNotification(roomId) {
+            try {
+                const myNick = localStorage.getItem('user_nick') || '';
+                const response = await fetch(`/api/get_posts/${roomId}?user=${encodeURIComponent(myNick)}`);
+                const posts = await response.json();
+                if (posts.length > 0) {
+                    const newestPost = posts[0];
+                    if (newestPost.author !== myNick) {
+                        notifyAudio.play().catch(()=>{}); 
+                        
+                        if (document.hidden && Notification.permission === "granted") {
+                            new Notification(`Идиаканта (В другой комнате)`, {
+                                body: `[${newestPost.author}]: ${newestPost.text}`,
+                                icon: 'https://api.dicebear.com/7.x/bottts-neutral/svg?seed=' + encodeURIComponent(newestPost.author)
+                            });
+                        }
+                    }
+                }
+            } catch(e){}
         }
 
         async function fetchNewPostsForCurrentRoom() {
@@ -621,10 +664,9 @@
                 const newPosts = posts.filter(p => p.id > lastKnownPostId);
                 
                 if (newPosts.length > 0) {
-                    // Проигрываем звук и шлём Push-уведомление, если сообщение не от нас
                     const newestPost = newPosts[0];
                     if (newestPost.author !== myNick) {
-                        notifyAudio.play().catch(()=>{}); // Воспроизводим звук уведомления
+                        notifyAudio.play().catch(()=>{}); 
                         
                         if (document.hidden && Notification.permission === "granted") {
                             new Notification(`Идиаканта: ${newestPost.author}`, {
